@@ -6,7 +6,7 @@ from io import StringIO
 # pylint: disable=import-error,no-name-in-module
 from clingo.symbol import Function, Number, String, parse_term
 
-from aspen.tree import AspenTree
+from aspen.tree import AspenTree, TransformError, generic_util_path
 from aspen.utils.testing import AspenTestCase
 from aspen.utils.tree_sitter_utils import get_node_at_path
 
@@ -326,6 +326,49 @@ p(1
             sources=["a."],
             meta_files=[encoding_dir / "raise_error_no_loc.lp"],
         )
+
+    def test_transform_raises_syntax_error_missing(self) -> None:
+        """Test that a missing-token syntax error reports its location,
+        the offending source line with a caret, and the missing token -
+        but no "expected" hint, since node.type already is the answer.
+        """
+        self.assert_transform_raises(
+            message_regex=(r"line 1, column 7: missing '\.'\n" r"a :- b\n" r"      \^"),
+            language=clingo_lang,
+            sources=["a :- b"],
+            meta_files=[generic_util_path / "raise_syntax_error.lp"],
+        )
+
+    def test_transform_raises_syntax_error_with_hint(self) -> None:
+        """Test that an ERROR node whose lookahead set is short and
+        specific gets an "expected one of: ..." hint appended - the
+        parser consumed the valid keyword '#sum' and stranded the typo'd
+        trailing 'a' right before the '{' it wanted.
+        """
+        self.assert_transform_raises(
+            message_regex=(
+                r"line 1, column 10: unexpected 'a', expected one of: \{\n"
+                r"a :- #suma\{X : b\(X\)\} = 2\.\n"
+                r"         \^"
+            ),
+            language=clingo_lang,
+            sources=["a :- #suma{X : b(X)} = 2."],
+            meta_files=[generic_util_path / "raise_syntax_error.lp"],
+        )
+
+    def test_transform_raises_syntax_error_without_hint(self) -> None:
+        """Test that an ERROR node whose lookahead set is long (a
+        generic, heavily-reused continuation point, not a specific
+        expectation) gets no "expected" hint - a long list would just
+        be noise, not a pointer to the mistake."""
+        tree = AspenTree(default_language=clingo_lang)
+        tree.parse("a(1,,2).")
+        with self.assertRaisesRegex(
+            TransformError,
+            r"line 1, column 4: unexpected ','\na\(1,,2\)\.\n   \^",
+        ) as ctx:
+            tree.transform(meta_files=[generic_util_path / "raise_syntax_error.lp"])
+        self.assertNotIn("expected one of", str(ctx.exception))
 
     def test_transform_print(self) -> None:
         """Test that aspen(print(String)) symbols derived during

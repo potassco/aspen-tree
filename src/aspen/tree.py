@@ -22,6 +22,7 @@ from aspen.utils.tree_sitter_utils import (
     calc_node_append_range,
     calc_node_edit_range,
     edit_tree,
+    format_syntax_error,
     get_path_of_node,
     get_tree_changes,
 )
@@ -611,6 +612,20 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             inserts = self._cons_list_symb2py(symb.arguments[1])
             insert_strs = [self._template_symb2str(s) for s in inserts]
             py_str = join_str.join(insert_strs)
+        elif symb.match("syntax_error", 1) and symb.arguments[0].match("node", 1):
+            try:
+                source, node = self._source_path_symb2ts(
+                    self._node_id2source_path[symb.arguments[0]]
+                )
+            except ValueError as exc:  # nocoverage
+                raise ValueError(
+                    f"Symbol {symb} could not be converted to string."
+                ) from exc
+            language = source.parser.language
+            assert language is not None
+            py_str = format_syntax_error(
+                node, source.source_bytes, source.encoding, language
+            )
         else:
             raise ValueError(f"Symbol {symb} could not be converted to string.")
         return py_str

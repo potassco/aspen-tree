@@ -6,11 +6,15 @@ from tree_sitter import Language, Node, Parser, Point, Tree
 
 from aspen.utils.log import TestCaseWithRedirectedLogs
 from aspen.utils.tree_sitter_utils import (
+    _preceding_leaf,  # pylint: disable=protected-access
+)
+from aspen.utils.tree_sitter_utils import (
     Change,
     EditRange,
     calc_node_append_range,
     calc_node_edit_range,
     edit_tree,
+    expected_symbols,
     get_node_at_path,
     get_tree_changes,
 )
@@ -28,7 +32,9 @@ ExpectedChangeDescriptor = tuple[
 ]
 
 
-class TestTreeSitterUtils(TestCaseWithRedirectedLogs):
+class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
+    TestCaseWithRedirectedLogs
+):
     """Test tree-sitter related utilities"""
 
     maxDiff = None
@@ -319,3 +325,42 @@ class TestTreeSitterUtils(TestCaseWithRedirectedLogs):
             expected_final_bytes=b"a :- b. d. very_long_name :- longer_name.",
             expected_change_descriptors=[(([0], 2), ([0], 3))],
         )
+
+    def test_preceding_leaf_no_leaf_before(self) -> None:
+        """Test that the very first leaf in a source has no preceding
+        leaf at all."""
+        parser = Parser(clingo_lang)
+        tree = parser.parse(b"a.")
+        first_leaf = get_node_at_path(tree, [0, 0, 0, 0], reverse=True)
+        self.assertEqual(first_leaf.type, "identifier")
+        self.assertIsNone(_preceding_leaf(first_leaf))
+        self.assertListEqual(expected_symbols(clingo_lang, first_leaf), [])
+
+    def test_preceding_leaf_walks_up_through_parents(self) -> None:
+        """Test that finding the preceding leaf walks up through
+        ancestors when the node has no preceding sibling of its own -
+        here, the first identifier of the body's first literal has
+        none at its own level, nor does that literal itself (the first
+        child of body), so it has to walk up two levels to body, whose
+        preceding sibling is ':-'."""
+        parser = Parser(clingo_lang)
+        tree = parser.parse(b"b :- c, d.")
+        c_leaf = get_node_at_path(tree, [0, 2, 0, 0, 0], reverse=True)
+        self.assertEqual(c_leaf.text, b"c")
+        preceding = _preceding_leaf(c_leaf)
+        assert preceding is not None
+        self.assertEqual(preceding.type, ":-")
+
+    def test_preceding_leaf_descends_into_compound_sibling(self) -> None:
+        """Test that when the preceding sibling itself has children,
+        the preceding leaf is its rightmost descendant, not itself -
+        here the final '.' node's preceding sibling is the whole body
+        'c', which is itself a subtree, not a single token."""
+        parser = Parser(clingo_lang)
+        tree = parser.parse(b"b(1,2) :- c.")
+        dot = get_node_at_path(tree, [0, 3], reverse=True)
+        self.assertEqual(dot.type, ".")
+        preceding = _preceding_leaf(dot)
+        assert preceding is not None
+        self.assertEqual(preceding.text, b"c")
+        self.assertEqual(preceding.child_count, 0)
