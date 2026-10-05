@@ -364,3 +364,38 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
         assert preceding is not None
         self.assertEqual(preceding.text, b"c")
         self.assertEqual(preceding.child_count, 0)
+
+    def test_preceding_leaf_skips_extras(self) -> None:
+        """Test that a comment sitting between the real preceding token
+        and the node in question is skipped over, not picked as the
+        preceding leaf itself - comments are extras, invisible to the
+        grammar, and carry no useful parse state of their own."""
+        parser = Parser(clingo_lang)
+        tree = parser.parse(b"a :- b %% a comment\n")
+        missing_dot = get_node_at_path(tree, [0, 4], reverse=True)
+        self.assertTrue(missing_dot.is_missing)
+        preceding = _preceding_leaf(missing_dot)
+        assert preceding is not None
+        self.assertEqual(preceding.type, "identifier")
+        self.assertEqual(preceding.text, b"b")
+
+    def test_expected_symbols_for_error_node(self) -> None:
+        """Test that for an ERROR node, expected_symbols uses the
+        error node's own first leaf, per tree-sitter's documented
+        recommendation for LookaheadIterator."""
+        parser = Parser(clingo_lang)
+        tree = parser.parse(b"a :- #suma{X : b(X)} = 2.")
+        error_node = get_node_at_path(tree, [0, 2, 0, 0, 1], reverse=True)
+        self.assertTrue(error_node.is_error)
+        self.assertEqual(error_node.text, b"a")
+        self.assertListEqual(expected_symbols(clingo_lang, error_node), ["{"])
+
+    def test_expected_symbols_for_missing_node(self) -> None:
+        """Test that for a MISSING node, expected_symbols uses the
+        preceding non-extra leaf's next_parse_state, per tree-sitter's
+        documented recommendation."""
+        parser = Parser(clingo_lang)
+        tree = parser.parse(b"#show a/1")
+        missing_dot = get_node_at_path(tree, [0, 2], reverse=True)
+        self.assertTrue(missing_dot.is_missing)
+        self.assertListEqual(expected_symbols(clingo_lang, missing_dot), ["."])

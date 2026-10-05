@@ -329,14 +329,38 @@ def get_tree_changes(old_tree: ts.Tree, new_tree: ts.Tree) -> list[Change]:
 _MAX_EXPECTED_HINT_SYMBOLS = 6
 
 
+# Grammar-internal bookkeeping symbols that aren't meaningful to a human
+# reading an "expected: ..." hint. Extend as needed.
+_NOISE_SYMBOLS = {
+    "line_comment",
+    "block_comment",
+    "end",
+}
+
+
+def _first_leaf(node: ts.Node) -> ts.Node:
+    """The leftmost leaf descendant of `node` (itself, if already one)."""
+    leaf = node
+    while leaf.child_count > 0:
+        leaf = leaf.children[0]
+    return leaf
+
+
 def _preceding_leaf(node: ts.Node) -> Optional[ts.Node]:
-    """Find the last real token that appears before `node` in document
-    order, walking up through parents when `node` is the first child at
-    its level."""
+    """Find the last real, non-extra token that appears before `node` in
+    document order, walking up through parents when `node` is the first
+    child at its level, and skipping over extras (e.g. comments) - those
+    are invisible to the grammar, so they carry no parse state of their
+    own that's useful here."""
     anchor = node
     prev = anchor.prev_sibling
-    while prev is None and anchor.parent is not None:
-        anchor = anchor.parent
+    while True:
+        while prev is None and anchor.parent is not None:
+            anchor = anchor.parent
+            prev = anchor.prev_sibling
+        if prev is None or not prev.is_extra:
+            break
+        anchor = prev
         prev = anchor.prev_sibling
     if prev is None:
         return None
@@ -346,35 +370,46 @@ def _preceding_leaf(node: ts.Node) -> Optional[ts.Node]:
     return leaf
 
 
+def _symbols_at_state(language: ts.Language, state: int) -> list[str]:
+    iterator = language.lookahead_iterator(state)
+    if iterator is None:  # nocoverage
+        return []
+    return sorted({iterator.current_symbol_name for _ in iterator} - _NOISE_SYMBOLS)
+
+
 def expected_symbols(language: ts.Language, node: ts.Node) -> list[str]:
-    """What the grammar would have accepted immediately before `node`,
-    using the LR parse state of the last real token preceding it.
+    """What the grammar would have accepted at `node`'s position.
 
-    Reading parse_state off an ERROR/MISSING node itself doesn't work:
-    it sits in a generic error-recovery state, and querying that state
-    returns close to the whole grammar's vocabulary. The last real leaf
-    before the error region's own next_parse_state is the one that
-    reflects where the parser actually was.
+    This follows tree-sitter's own recommendation (see
+    Language.lookahead_iterator's docstring), which differs by node
+    kind: for an ERROR node, use the lookahead iterator on its own
+    first leaf's parse_state - that leaf is the token the parser
+    actually choked on, so its state captures exactly where things
+    went wrong. A MISSING node has no such leaf of its own, so the
+    next best thing is the last real, non-extra leaf *before* it,
+    using that leaf's next_parse_state. Anything that's neither ERROR
+    nor MISSING falls back to the same preceding-leaf approach as
+    MISSING, as the more general "what's valid at this position"
+    query.
 
-    Tree-sitter merges "compatible" parse states that are
+    Separately, tree-sitter merges "compatible" parse states that are
     reused across multiple unrelated grammar contexts (see
     https://github.com/tree-sitter/tree-sitter/issues/4711), which can
     inflate this list with symbols only valid in some other context.
-    There's no way to filter those out from here; --disable-optimizations
-    at grammar-generation time is the only fix, at the cost of a much
-    larger parse table. The benefits are also no huge.
+    There's no way to filter those out from here;
+    --disable-optimizations at grammar-generation time is the only
+    fix, at the cost of a larger parse table, which we choose not to
+    do for now.
 
     """
-    leaf = _preceding_leaf(node)
-    if leaf is None:  # nocoverage
-        return []
-    next_parse_state = leaf.next_parse_state
-    if next_parse_state is None:  # nocoverage
-        return []
-    iterator = language.lookahead_iterator(leaf.next_parse_state)
-    if iterator is None:  # nocoverage
-        return []
-    return sorted({iterator.current_symbol_name for _ in iterator})
+    if node.is_error:
+        state = _first_leaf(node).parse_state
+    else:
+        leaf = _preceding_leaf(node)
+        if leaf is None:
+            return []
+        state = leaf.next_parse_state
+    return _symbols_at_state(language, state)
 
 
 def _expected_hint(
@@ -384,25 +419,17 @@ def _expected_hint(
 
     Deliberately narrow: MISSING nodes already carry their one answer
     in node.type, so this is never called for them. For ERROR nodes,
-    expected_symbols() is often either empty (no reliable information,
-    e.g. at an ambiguous list-continuation point) or very long (a
-    generic "end of expression"-style continuation point, reused across
-    many unrelated grammar contexts) - neither is worth showing. What's
-    worth showing is the narrow case: right after a keyword-like token,
-    where the parser has a small, specific set of valid continuations,
-    typically because an almost-correct keyword was mistyped.
+    expected_symbols() is often either empty or very long (a generic
+    "end of expression"-style continuation point, reused across many
+    unrelated grammar contexts) - neither is worth showing. What's
+    worth showing is the narrow case: right after a keyword-like
+    token, where the parser has a small, specific set of valid
+    continuations, typically because an almost-correct keyword was
+    mistyped.
 
     """
     names = expected_symbols(language, node)
     if not names or len(names) > _MAX_EXPECTED_HINT_SYMBOLS:
-        return []
-    # guard against the degenerate case where the hint just echoes back
-    # the very thing that was unexpected (seen with prefix operators
-    # like '-', which are both legal here and what was typed - but
-    # that case comes with a long, generic list that the length check
-    # above already filters out before this ever matters in practice)
-    stripped = offending_text.strip().lower()
-    if stripped and any(name.lower() == stripped for name in names):  # nocoverage
         return []
     return names
 
