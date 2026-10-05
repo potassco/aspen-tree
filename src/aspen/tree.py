@@ -820,7 +820,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 "prev_sibling",
                 "next_sibling",
             }
-            for symb in model.symbols(shown=True):
+            for symb in model.symbols(terms=True):
                 # See the equivalent comment in _on_transform_model:
                 # cache .type/.positive/.name/.arguments per symbol
                 # instead of re-deriving them via repeated .match()
@@ -859,6 +859,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                     query2_related_dict[query][rv_name] = rv_args[0]
             return False
 
+        control.assign_external(Function("re_reify", []), True)
         control.solve(on_model=_on_re_reify_model)
         for query, siblings in query2new_siblings.items():
             kwargs = query2_related_dict[query]

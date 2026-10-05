@@ -1,6 +1,5 @@
 #include "./node_at_path.lp".
 #include "./delete_subtree.lp".
-#include "../derived_predicates/named_child_index.lp".
 
 % find siblings of the given length starting at path
 %%
@@ -67,5 +66,11 @@ aspen(return(re_reify_siblings(Source, append_to_source), prev_sibling(LastSib))
   aspen(query(re_reify_siblings(Source, append_to_source))),
   source_root(Source, Root),
   child(Root, LastSib),
-  named_child_index(LastSib, Idx),
-  #false: child(Root, Sib), named_child_index(Sib, Idx'), Idx < Idx'.
+  not next_sibling(LastSib,_).
+
+#show.
+#show aspen(return(X,Y)):
+  aspen(return(X,Y)),
+  re_reify,
+  X=(re_reify_siblings(S,A);
+     re_reify_siblings(S,P,L)).

@@ -1,10 +1,16 @@
-#show node/1.
-#show type/2.
-#show error/1.
-#show missing/1.
-#show extra/1.
-#show leaf_text/2.
-#show field/2.
-#show child/2.
-#show next_sibling/2.
-#show aspen/1.
+#external re_reify.
+#show.
+#show aspen(X) :
+  aspen(X),
+  not re_reify,
+  X=(replace(N,T);
+     append(N,T);
+     comes_before(E1,E2);
+     next_program(P,C);
+     log(L,T);
+     log(N,L,T);
+     print(T);
+     print(O,T);
+     exception(T);
+     exception(N,T);
+     return(path_of_node(N),P)).
