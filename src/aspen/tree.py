@@ -111,6 +111,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         self.textio_symbols = {} if textio_symbols is None else textio_symbols
         self._id_generator = id_counter() if id_generator is None else id_generator
         self._node_id2source_path: dict[Symbol, Symbol] = {}
+        self._pending_source_changes: dict[Symbol, list[Change]] = {}
 
     def _path_symb2py(self, path_symb: Symbol) -> list[int]:
         """Convert path expression from symbolic to list form."""
@@ -358,6 +359,9 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             control.ground(parts=parts)
             self.next_transform_program = None
             control.solve(on_model=self._on_transform_model)
+            if self._pending_source_changes:
+                self._re_reify_changed_subtrees(self._pending_source_changes, control)
+                self._pending_source_changes = {}
 
     def _on_transform_model(  # pylint: disable=too-many-branches,too-many-statements
         self, model: Model
@@ -375,7 +379,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         log_symbols: list[Symbol] = []
         print_symbols: list[Symbol] = []
         exception_symbols: list[Symbol] = []
-        for symb in model.symbols(shown=True):
+        for symb in model.symbols(terms=True):
             # Manually inlined equivalent of chained `symb.match(...)`
             # calls: each `.match()` re-fetches `.name` and rebuilds
             # `.arguments` from scratch via clingo's C API, so with an
@@ -451,7 +455,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         self._process_exception_symbs(exception_symbols)
         sorted_edit_symbols = self._topological_sort_edits(edit_symbols, deps)
         edited_sources.update(self._edit_sources_from_symbs(sorted_edit_symbols))
-        self._reparse_sources(edited_sources)
+        self._pending_source_changes = self._reparse_sources(edited_sources)
         return False
 
     def _get_loc_prefix_from_source_node(self, source: Source, node: ts.Node) -> str:
@@ -705,9 +709,9 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             edited_sources.add(target_source.id)
         return edited_sources
 
-    def _reparse_sources(self, edited_sources: set[Symbol]) -> None:
-        """Re-parse sources that have been edited, and update fact
-        representation based on the changed ranges of sources.
+    def _reparse_sources(self, edited_sources: set[Symbol]) -> dict[Symbol, list[Change]]:
+        """Re-parse sources that have been edited, and return the
+        changes found for each, to be re-reified by the caller.
         """
         source_changes: dict[Symbol, list[Change]] = {}
         for source_symb in edited_sources:
@@ -723,7 +727,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             changes = get_tree_changes(old_tree, new_tree)
             source.tree = new_tree
             source_changes[source_symb] = changes
-        self._re_reify_changed_subtrees(source_changes)
+        return source_changes
 
     def _log_change(self, change: Change) -> None:  # nocoverage
         """Log change."""
@@ -761,10 +765,19 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
     def _re_reify_changed_subtrees(  # pylint: disable=too-many-statements
         self,
         source_changes: dict[Symbol, list[Change]],
+        control: Control,
     ) -> None:
         """Re-reify subtrees who's syntactic structure changed due to
-        edit, and delete outdated facts from before edit."""
+        edit, and delete outdated facts from before edit.
 
+        Reuses control - the caller's already-instantiated,
+        already-solved-once Control, which already has self.facts
+        grounded into it - rather than creating a separate one and
+        re-adding those facts to it. Grounding more onto it here is
+        only safe once the caller is done solving with it; it can't be
+        done reentrantly from within an on_model callback.
+
+        """
         query2new_siblings: dict[Symbol, list[ts.Node]] = {}
         new_facts: list[Symbol] = []
         for source_symb, changes in source_changes.items():
@@ -784,12 +797,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                         [source_symb, Function("append_to_source", [])],
                     )
                 query2new_siblings[query] = new_siblings
-        control = Control(logger=clingo_logger)
-        parts = [base_program]
-        encodings = [
-            generic_util_path / "queries" / "re_reify_siblings.lp",
-            encoding_path / "transform" / "defined.lp",
-        ]
+        encodings = [generic_util_path / "queries" / "re_reify_siblings.lp"]
         for encoding in encodings:
             control.load(str(encoding))
         with control.backend() as backend:
@@ -797,10 +805,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 query = Function("aspen", [Function("query", [query])])
                 atom = backend.add_atom(query)
                 backend.add_rule([atom])
-            for f in self.facts:
-                atom = backend.add_atom(f)
-                backend.add_rule([atom])
-        control.ground(parts=parts)
+        control.ground(parts=[base_program])
         delete_facts: set[Symbol] = set()
         query2_related_dict: defaultdict[Symbol, dict[str, Symbol]] = defaultdict(dict)
 
