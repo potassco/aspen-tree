@@ -36,7 +36,7 @@ def _transform_namespace(**overrides: object) -> Namespace:
         "meta_string": None,
         "program": "base",
         "control_option": None,
-        "show": "source",
+        "facts": False,
     }
     defaults.update(overrides)
     return Namespace(**defaults)
@@ -78,27 +78,72 @@ class TestParseProgram(TestCaseWithRedirectedLogs):
 class TestParseSourceSpec(TestCaseWithRedirectedLogs):
     """Test _parse_source_spec."""
 
-    def test_parse_source_spec_no_colon(self) -> None:
-        """Test that a source with no ':' at all defaults to stdout."""
-        self.assertEqual(_parse_source_spec("a.lp"), ("a.lp", None))
+    def test_parse_source_spec_plain(self) -> None:
+        """Test that a bare source has no language override and
+        defaults to stdout."""
+        self.assertEqual(
+            _parse_source_spec("a.lp", allow_dest=True), ("a.lp", None, None)
+        )
+
+    def test_parse_source_spec_with_lang(self) -> None:
+        """Test that '@LANG' is split off as a language override."""
+        self.assertEqual(
+            _parse_source_spec("a.lp@clingo", allow_dest=True),
+            ("a.lp", "clingo", None),
+        )
 
     def test_parse_source_spec_explicit_stdout(self) -> None:
         """Test that ':-' makes the default to stdout explicit."""
-        self.assertEqual(_parse_source_spec("a.lp:-"), ("a.lp", None))
+        self.assertEqual(
+            _parse_source_spec("a.lp:-", allow_dest=True), ("a.lp", None, None)
+        )
 
     def test_parse_source_spec_file_destination(self) -> None:
         """Test that ':DEST' routes to a file destination."""
         self.assertEqual(
-            _parse_source_spec("a.lp:a-trans.lp"), ("a.lp", Path("a-trans.lp"))
+            _parse_source_spec("a.lp:a-trans.lp", allow_dest=True),
+            ("a.lp", None, Path("a-trans.lp")),
         )
 
-    def test_parse_source_spec_stdin_no_colon(self) -> None:
-        """Test that bare stdin ('-') defaults to stdout."""
-        self.assertEqual(_parse_source_spec("-"), ("-", None))
+    def test_parse_source_spec_lang_and_destination(self) -> None:
+        """Test that '@LANG' and ':DEST' combine, in that order."""
+        self.assertEqual(
+            _parse_source_spec("a.lp@clingo:a-trans.lp", allow_dest=True),
+            ("a.lp", "clingo", Path("a-trans.lp")),
+        )
 
-    def test_parse_source_spec_stdin_with_destination(self) -> None:
-        """Test that stdin can be routed to a file via '-:DEST'."""
-        self.assertEqual(_parse_source_spec("-:out.lp"), ("-", Path("out.lp")))
+    def test_parse_source_spec_reversed_order_rejected(self) -> None:
+        """Test that ':DEST@LANG' (destination before language) is
+        rejected, since only SOURCE[@LANG][:DEST] is accepted."""
+        with self.assertRaisesRegex(ValueError, "@LANG.*:DEST"):
+            _parse_source_spec("a.lp:a-trans.lp@clingo", allow_dest=True)
+
+    def test_parse_source_spec_destination_rejected_when_disallowed(self) -> None:
+        """Test that ':DEST' is rejected outright when allow_dest is
+        False, e.g. for reify."""
+        with self.assertRaisesRegex(ValueError, "not accepted here"):
+            _parse_source_spec("a.lp:out.lp", allow_dest=False)
+
+    def test_parse_source_spec_lang_allowed_when_dest_disallowed(self) -> None:
+        """Test that '@LANG' alone is still accepted when allow_dest
+        is False."""
+        self.assertEqual(
+            _parse_source_spec("a.lp@clingo", allow_dest=False),
+            ("a.lp", "clingo", None),
+        )
+
+    def test_parse_source_spec_stdin_plain(self) -> None:
+        """Test that bare stdin ('-') has no language override and
+        defaults to stdout."""
+        self.assertEqual(_parse_source_spec("-", allow_dest=True), ("-", None, None))
+
+    def test_parse_source_spec_stdin_with_lang_and_destination(self) -> None:
+        """Test that stdin can combine '@LANG' and ':DEST', just
+        like a file source."""
+        self.assertEqual(
+            _parse_source_spec("-@clingo:out.lp", allow_dest=True),
+            ("-", "clingo", Path("out.lp")),
+        )
 
 
 class TestResolveLanguage(TestCaseWithRedirectedLogs):
@@ -179,7 +224,6 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
                 source=[str(source_path)],
                 language="clingo",
                 encoding="utf8",
-                output=None,
             )
             buf = io.StringIO()
             with redirect_stdout(buf):
@@ -190,7 +234,7 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
 
     def test_cmd_reify_stdin(self) -> None:
         """Test that cmd_reify also accepts '-' for stdin."""
-        args = Namespace(source=["-"], language="clingo", encoding="utf8", output=None)
+        args = Namespace(source=["-"], language="clingo", encoding="utf8")
         buf = io.StringIO()
         with patch.object(sys, "stdin") as mock_stdin:
             mock_stdin.buffer = io.BytesIO(b"a.")
@@ -211,7 +255,6 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
                 source=[str(first_path), str(second_path)],
                 language="clingo",
                 encoding="utf8",
-                output=None,
             )
             buf = io.StringIO()
             with redirect_stdout(buf):
@@ -224,10 +267,55 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
         """Test that using '-' more than once is rejected with a
         clear error, rather than silently reading an empty source the
         second time."""
-        args = Namespace(
-            source=["-", "-"], language="clingo", encoding="utf8", output=None
-        )
+        args = Namespace(source=["-", "-"], language="clingo", encoding="utf8")
         with self.assertRaisesRegex(ValueError, "stdin"):
+            cmd_reify(args)
+
+    def test_cmd_reify_source_lang_override(self) -> None:
+        """Test that a source's '@LANG' suffix overrides the default
+        -l/--language for that source."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a.")
+            args = Namespace(
+                source=[f"{source_path}@aspcore2"],
+                language="clingo",
+                encoding="utf8",
+            )
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cmd_reify(args)
+        self.assertIn('language(s(0),"aspcore2").', buf.getvalue())
+
+    def test_cmd_reify_no_default_language_needed_when_overridden(self) -> None:
+        """Test that -l/--language can be omitted entirely as long as
+        every source specifies its own '@LANG'."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a.")
+            args = Namespace(
+                source=[f"{source_path}@clingo"], language=None, encoding="utf8"
+            )
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cmd_reify(args)
+        self.assertIn('language(s(0),"clingo").', buf.getvalue())
+
+    def test_cmd_reify_missing_language_rejected(self) -> None:
+        """Test that a source with no '@LANG' and no default
+        -l/--language raises a clear error, rather than crashing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a.")
+            args = Namespace(source=[str(source_path)], language=None, encoding="utf8")
+            with self.assertRaisesRegex(ValueError, "[Nn]o.*language"):
+                cmd_reify(args)
+
+    def test_cmd_reify_rejects_destination_suffix(self) -> None:
+        """Test that reify rejects a ':DEST' suffix on any source:
+        reify always writes its combined output to stdout."""
+        args = Namespace(source=["a.lp:out.lp"], language="clingo", encoding="utf8")
+        with self.assertRaisesRegex(ValueError, "not accepted here"):
             cmd_reify(args)
 
 
@@ -259,8 +347,8 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
                 cmd_transform(args)
         self.assertEqual(buf.getvalue(), "a(X) :- b(X).\n")
 
-    def test_cmd_transform_show_facts(self) -> None:
-        """Test that --show facts prints the fact base instead of the
+    def test_cmd_transform_facts_flag(self) -> None:
+        """Test that --facts prints the fact base instead of the
         source text."""
         with tempfile.TemporaryDirectory() as tmp:
             source_path = Path(tmp) / "in.lp"
@@ -269,7 +357,7 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
                 source=[str(source_path)],
                 meta_file=[encoding_dir / "add_var.lp"],
                 program='add_var_to_atoms("X")',
-                show="facts",
+                facts=True,
             )
             buf = io.StringIO()
             with redirect_stdout(buf):
@@ -278,8 +366,8 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
         self.assertIn('language(s(0),"clingo").', output)
         self.assertNotIn("a(X) :- b(X).", output)
 
-    def test_cmd_transform_show_facts_rejects_destination(self) -> None:
-        """Test that --show facts rejects a ':DEST' on any source: it
+    def test_cmd_transform_facts_flag_rejects_destination(self) -> None:
+        """Test that --facts rejects a ':DEST' on any source: it
         makes no sense there, since the combined fact base always
         goes to stdout."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -289,14 +377,14 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
                 source=[f"{source_path}:{Path(tmp) / 'out.lp'}"],
                 meta_file=[encoding_dir / "add_var.lp"],
                 program='add_var_to_atoms("X")',
-                show="facts",
+                facts=True,
             )
-            with self.assertRaisesRegex(ValueError, ":DEST.*--show.*facts"):
+            with self.assertRaisesRegex(ValueError, ":DEST.*--facts"):
                 cmd_transform(args)
 
-    def test_cmd_transform_show_facts_allows_explicit_stdout(self) -> None:
-        """Test that --show facts tolerates an explicit ':-' (stdout)
-        on a source, since it doesn't actually request a destination."""
+    def test_cmd_transform_facts_flag_allows_explicit_stdout(self) -> None:
+        """Test that --facts tolerates an explicit ':-' (stdout) on a
+        source, since it doesn't actually request a destination."""
         with tempfile.TemporaryDirectory() as tmp:
             source_path = Path(tmp) / "in.lp"
             source_path.write_text("a :- b.")
@@ -304,7 +392,7 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
                 source=[f"{source_path}:-"],
                 meta_file=[encoding_dir / "add_var.lp"],
                 program='add_var_to_atoms("X")',
-                show="facts",
+                facts=True,
             )
             buf = io.StringIO()
             with redirect_stdout(buf):
@@ -416,6 +504,33 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
                     cmd_transform(args)
             self.assertEqual(buf.getvalue(), "a(X) :- b(X).\n")
             self.assertEqual(file_out.read_text(), "c(X) :- d(X).\n")
+
+    def test_cmd_transform_source_lang_override(self) -> None:
+        """Test that a source's '@LANG' suffix overrides the default
+        -l/--language for just that source, combined with ':DEST'."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a :- b.")
+            out_path = Path(tmp) / "out.lp"
+            args = _transform_namespace(
+                source=[f"{source_path}@clingo:{out_path}"],
+                language=None,
+                meta_file=[encoding_dir / "add_var.lp"],
+                program='add_var_to_atoms("X")',
+            )
+            cmd_transform(args)
+            self.assertEqual(out_path.read_text(), "a(X) :- b(X).\n")
+
+    def test_cmd_transform_reversed_order_rejected(self) -> None:
+        """Test that ':DEST@LANG' (destination before language) is
+        rejected with a clear error."""
+        args = _transform_namespace(
+            source=["a.lp:out.lp@clingo"],
+            meta_file=[encoding_dir / "add_var.lp"],
+            program='add_var_to_atoms("X")',
+        )
+        with self.assertRaisesRegex(ValueError, "@LANG.*:DEST"):
+            cmd_transform(args)
 
     def test_cmd_transform_stdin_twice_rejected(self) -> None:
         """Test that using '-' more than once is rejected with a

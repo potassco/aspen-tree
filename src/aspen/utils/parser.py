@@ -18,18 +18,22 @@ VERSION = metadata.version("aspen-tree-5")
 
 def _add_source_arguments(subparser: ArgumentParser, source_help: str) -> None:
     """Arguments shared by both subcommands: what to parse, and how."""
-    subparser.add_argument("source", nargs="+", help=source_help)
+    subparser.add_argument(
+        "source", nargs="+", help=source_help, metavar="SOURCE[@LANG][:DEST]"
+    )
     subparser.add_argument(
         "-l",
         "--language",
-        required=True,
+        default=None,
         metavar="NAME",
         help=(
-            "tree-sitter grammar to parse with, e.g. 'clingo' "
-            "(loads the installed tree_sitter_clingo package)"
+            "default tree-sitter grammar to parse sources with, e.g. 'clingo' "
+            "(loads the installed tree_sitter_clingo package); a source may "
+            "override this for itself with its own '@LANG' suffix"
         ),
     )
     subparser.add_argument(
+        "-e",
         "--encoding",
         choices=["utf8", "utf16"],
         default="utf8",
@@ -46,15 +50,13 @@ def _add_reify_parser(subparsers: "_SubParsersAction[ArgumentParser]") -> None:
         ),
     )
     _add_source_arguments(
-        reify_parser, "path(s) to the source file(s) to parse, or '-' for stdin"
-    )
-    reify_parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        default=None,
-        metavar="PATH",
-        help="write the combined output to this file instead of stdout",
+        reify_parser,
+        (
+            "SOURCE specifies a path to a source file to parse, or '-' for stdin; each "
+            "may optionally be followed by '@LANG' (e.g. 'a.lp@clingo') to "
+            "parse that source with a different language than the default "
+            "(-l/--language)"
+        ),
     )
     reify_parser.set_defaults(func=cmd_reify)
 
@@ -70,12 +72,14 @@ def _add_transform_parser(subparsers: "_SubParsersAction[ArgumentParser]") -> No
     _add_source_arguments(
         transform_parser,
         (
-            "path(s) to the source file(s) to parse, or '-' for stdin; each "
-            "may optionally be followed by ':DEST' (e.g. 'a.lp:a-trans.lp') to "
-            "send that source's transformed output to DEST instead of stdout "
-            "- DEST may itself be '-' to say so explicitly; only meaningful "
-            "with --show source; if a source starts with '-' (e.g. '-:out.lp' "
-            "for stdin with a destination), put it after a literal '--'"
+            "SOURCE specifies a path to a source file to parse, or '-' for stdin; each "
+            "may optionally be followed by '@LANG' (e.g. 'a.lp@clingo') to "
+            "override the default language (-l/--language) for that source, "
+            "and/or by ':DEST' (e.g. 'a.lp@clingo:a-trans.lp') to send that "
+            "source's transformed output to DEST instead of stdout. "
+            ":DEST' is only meaningful without --facts; "
+            "if a source starts with '-' (e.g. '-:out.lp' for stdin with a "
+            "destination), put it after a literal '--'"
         ),
     )
     transform_parser.add_argument(
@@ -87,12 +91,13 @@ def _add_transform_parser(subparsers: "_SubParsersAction[ArgumentParser]") -> No
         help="a meta-encoding file to apply (repeatable)",
     )
     transform_parser.add_argument(
-        "-e",
+        "-s",
         "--meta-string",
-        metavar="SOURCE",
-        help="inline meta-encoding source to apply, in addition to any --meta-file",
+        metavar="STRING",
+        help="inline meta-encoding to apply, in addition to any --meta-file",
     )
     transform_parser.add_argument(
+        "-p",
         "--program",
         default="base",
         metavar="NAME(ARGS)",
@@ -108,13 +113,12 @@ def _add_transform_parser(subparsers: "_SubParsersAction[ArgumentParser]") -> No
         help="an extra option to pass to the underlying clingo Control (repeatable)",
     )
     transform_parser.add_argument(
-        "--show",
-        choices=["source", "facts"],
-        default="source",
+        "--facts",
+        action="store_true",
         help=(
-            "'source' writes each source's transformed text to its own "
-            "destination (see the ':DEST' source syntax); 'facts' instead "
-            "always prints the combined fact base to stdout [%(default)s]"
+            "print the combined fact base to stdout instead of writing each "
+            "source's transformed text to its own destination (see the "
+            "':EST' source syntax)"
         ),
     )
     transform_parser.set_defaults(func=cmd_transform)

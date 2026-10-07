@@ -54,8 +54,15 @@ class TestMain(TestCaseWithRedirectedLogs):
         self.assertEqual(ret.source, ["foo.lp"])
         self.assertEqual(ret.language, "clingo")
         self.assertEqual(ret.encoding, "utf8")
-        self.assertIsNone(ret.output)
         self.assertIs(ret.func, cmd_reify)
+
+    def test_parser_reify_language_defaults_to_none(self) -> None:
+        """Test that -l/--language is optional: with every source
+        giving its own '@LANG', no default is required."""
+        parser = get_parser()
+        ret = parser.parse_args(["reify", "foo.lp@clingo"])
+        self.assertIsNone(ret.language)
+        self.assertEqual(ret.source, ["foo.lp@clingo"])
 
     def test_parser_reify_multiple_sources(self) -> None:
         """Test that reify accepts multiple source positionals."""
@@ -63,39 +70,55 @@ class TestMain(TestCaseWithRedirectedLogs):
         ret = parser.parse_args(["reify", "foo.lp", "bar.lp", "-l", "clingo"])
         self.assertEqual(ret.source, ["foo.lp", "bar.lp"])
 
+    def test_parser_reify_encoding_short_flag(self) -> None:
+        """Test that -e is the short form of --encoding for reify."""
+        parser = get_parser()
+        ret = parser.parse_args(["reify", "foo.lp", "-l", "clingo", "-e", "utf16"])
+        self.assertEqual(ret.encoding, "utf16")
+
     def test_parser_transform_subcommand(self) -> None:
         """Test that the transform subcommand's arguments - including
-        the ones specific to it - parse as expected."""
+        the ones specific to it - parse as expected, using their
+        short flags."""
         parser = get_parser()
         ret = parser.parse_args(
             [
                 "transform",
-                "foo.lp:foo.out.lp",
+                "foo.lp@clingo:foo.out.lp",
                 "bar.lp:-",
                 "-l",
                 "clingo",
+                "-e",
+                "utf16",
                 "-f",
                 "a.lp",
                 "-f",
                 "b.lp",
-                "-e",
+                "-s",
                 'aspen(print("hi")).',
-                "--program",
+                "-p",
                 'my_program("X")',
                 "--control-option",
                 "-n 0",
-                "--show",
-                "facts",
+                "--facts",
             ]
         )
         self.assertEqual(ret.command, "transform")
-        self.assertEqual(ret.source, ["foo.lp:foo.out.lp", "bar.lp:-"])
+        self.assertEqual(ret.source, ["foo.lp@clingo:foo.out.lp", "bar.lp:-"])
+        self.assertEqual(ret.encoding, "utf16")
         self.assertEqual(ret.meta_file, [Path("a.lp"), Path("b.lp")])
         self.assertEqual(ret.meta_string, 'aspen(print("hi")).')
         self.assertEqual(ret.program, 'my_program("X")')
         self.assertEqual(ret.control_option, ["-n 0"])
-        self.assertEqual(ret.show, "facts")
+        self.assertTrue(ret.facts)
         self.assertIs(ret.func, cmd_transform)
+
+    def test_parser_transform_facts_defaults_false(self) -> None:
+        """Test that --facts defaults to off, i.e. the transformed
+        source text is written out by default."""
+        parser = get_parser()
+        ret = parser.parse_args(["transform", "foo.lp", "-l", "clingo"])
+        self.assertFalse(ret.facts)
 
     def test_main_runs_reify(self) -> None:
         """Test that main() dispatches to the reify command and

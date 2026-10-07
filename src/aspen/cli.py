@@ -58,25 +58,48 @@ def _write_output(text: str, output: Optional[Path]) -> None:
         output.write_text(text + "\n")
 
 
-def _parse_sources(tree: AspenTree, sources: Sequence[str]) -> list[Symbol]:
-    """Parse each given source in order, returning their identifiers.
-    "-" (stdin) can only be given once, since the stream can only be
-    read once."""
-    if sources.count("-") > 1:
+def _parse_sources(
+    tree: AspenTree, sources: Sequence[tuple[str, Optional[str]]]
+) -> list[Symbol]:
+    """Parse each given (source, lang) pair in order, returning their
+    identifiers: a source's own language (its '@LANG' suffix, already
+    split off by _parse_source_spec) overrides the tree's default
+    language when given. "-" (stdin) can only be given once, since
+    the stream can only be read once."""
+    if sum(1 for source, _ in sources if source == "-") > 1:
         raise ValueError("stdin ('-') can only be given as a source once.")
-    return [tree.parse(_read_source(source)) for source in sources]
+    return [
+        tree.parse(
+            _read_source(source),
+            language=resolve_language(lang) if lang is not None else None,
+        )
+        for source, lang in sources
+    ]
 
 
-def _parse_source_spec(spec: str) -> tuple[str, Optional[Path]]:
-    """Parse a transform source argument of the form SOURCE[:DEST]:
-    SOURCE is a path, or '-' for stdin, exactly as for reify; the
-    optional DEST after a single ':' is where that source's
-    transformed output goes - a path, or '-' (or omitted entirely,
-    i.e. no ':' at all) for stdout."""
-    source, sep, dest = spec.partition(":")
-    if not sep or dest == "-":
-        return source, None
-    return source, Path(dest)
+def _parse_source_spec(
+    spec: str, *, allow_dest: bool
+) -> tuple[str, Optional[str], Optional[Path]]:
+    """Parse a CLI source argument of the form SOURCE[@LANG][:DEST]:
+    SOURCE is a path, or '-' for stdin; the optional '@LANG' suffix
+    overrides the default language (-l/--language) for just this
+    source; the optional ':DEST' suffix (only accepted when
+    allow_dest, i.e. for transform) says where this source's
+    transformed output goes - a path, or '-' (or omitted entirely)
+    for stdout. '@LANG' must come before ':DEST', not after."""
+    pre, sep, dest_str = spec.partition(":")
+    if sep and not allow_dest:
+        raise ValueError(
+            f"Invalid source '{spec}': a ':DEST' destination is not accepted "
+            "here; only an optional '@LANG' suffix is allowed."
+        )
+    if "@" in dest_str:
+        raise ValueError(
+            f"Invalid source '{spec}': '@LANG' must come before ':DEST', not " "after it."
+        )
+    source, lang_sep, lang = pre.partition("@")
+    dest = None if not sep or dest_str == "-" else Path(dest_str)
+    return source, (lang if lang_sep else None), dest
 
 
 def _parse_program(program_arg: str) -> tuple[str, tuple[Symbol, ...]]:
@@ -98,44 +121,46 @@ def _parse_program(program_arg: str) -> tuple[str, tuple[Symbol, ...]]:
 
 
 def cmd_reify(args: Namespace) -> None:
-    """Run the `aspen reify` subcommand: parse one or more sources and
-    print their combined reified ASP fact representation."""
-    language = resolve_language(args.language)
-    tree = AspenTree(default_language=language, default_encoding=args.encoding)
-    _parse_sources(tree, args.source)
-    _write_output(_format_facts(tree.facts), args.output)
+    """Run the `aspen reify` subcommand: parse one or more
+    SOURCE[@LANG] sources and print their combined reified ASP fact
+    representation to stdout."""
+    default_language = resolve_language(args.language) if args.language else None
+    tree = AspenTree(default_language=default_language, default_encoding=args.encoding)
+    specs = [_parse_source_spec(spec, allow_dest=False) for spec in args.source]
+    _parse_sources(tree, [(source, lang) for source, lang, _ in specs])
+    _write_output(_format_facts(tree.facts), None)
 
 
 def cmd_transform(args: Namespace) -> None:
     """Run the `aspen transform` subcommand: parse one or more
-    SOURCE[:DEST] sources, apply a transformation meta-encoding to
-    them, and either write out each source's transformed text to its
-    own DEST (--show source) or print the combined fact base to
-    stdout (--show facts)."""
+    SOURCE[@LANG][:DEST] sources, apply a transformation
+    meta-encoding to them, and either write out each source's
+    transformed text to its own DEST (the default) or print the
+    combined fact base to stdout (--facts)."""
     if not args.meta_file and not args.meta_string:
         raise ValueError(
             "transform requires at least one of --meta-file or --meta-string."
         )
-    specs = [_parse_source_spec(spec) for spec in args.source]
-    if args.show == "facts" and any(dest is not None for _, dest in specs):
+    specs = [_parse_source_spec(spec, allow_dest=True) for spec in args.source]
+    if args.facts and any(dest is not None for _, _, dest in specs):
         raise ValueError(
             "transform does not accept a ':DEST' output destination on any "
-            "source when --show is 'facts': the combined fact base is "
-            "always printed to stdout."
+            "source when --facts is given: the combined fact base is always "
+            "printed to stdout."
         )
-    language = resolve_language(args.language)
-    tree = AspenTree(default_language=language, default_encoding=args.encoding)
-    source_symbs = _parse_sources(tree, [source for source, _ in specs])
+    default_language = resolve_language(args.language) if args.language else None
+    tree = AspenTree(default_language=default_language, default_encoding=args.encoding)
+    source_symbs = _parse_sources(tree, [(source, lang) for source, lang, _ in specs])
     tree.transform(
         meta_files=args.meta_file,
         meta_string=args.meta_string,
         initial_program=_parse_program(args.program),
         control_options=args.control_option,
     )
-    if args.show == "facts":
+    if args.facts:
         _write_output(_format_facts(tree.facts), None)
         return
-    for source_symb, (_, dest) in zip(source_symbs, specs):
+    for source_symb, (_, _, dest) in zip(source_symbs, specs):
         source = tree.sources[source_symb]
         _write_output(source.source_bytes.decode(source.encoding), dest)
 
