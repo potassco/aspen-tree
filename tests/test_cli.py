@@ -14,6 +14,7 @@ from clingo.symbol import Function, Number, String
 
 from aspen.cli import (
     _format_facts,
+    _parse_control_options,
     _parse_program,
     _parse_source_spec,
     _read_source,
@@ -35,7 +36,7 @@ def _transform_namespace(**overrides: object) -> Namespace:
         "meta_file": None,
         "meta_string": None,
         "program": "base",
-        "control_option": None,
+        "control_options": None,
         "facts": False,
     }
     defaults.update(overrides)
@@ -73,6 +74,43 @@ class TestParseProgram(TestCaseWithRedirectedLogs):
         string, is rejected with a clear error."""
         with self.assertRaisesRegex(ValueError, "Invalid --program term"):
             _parse_program("42")
+
+
+class TestParseControlOptions(TestCaseWithRedirectedLogs):
+    """Test _parse_control_options."""
+
+    def test_parse_control_options_none(self) -> None:
+        """Test that omitting -c/--control-options means no extra
+        options at all."""
+        self.assertEqual(_parse_control_options(None), [])
+
+    def test_parse_control_options_empty_string(self) -> None:
+        """Test that an empty string also means no extra options."""
+        self.assertEqual(_parse_control_options(""), [])
+
+    def test_parse_control_options_single(self) -> None:
+        """Test that a single option becomes a one-element list."""
+        self.assertEqual(_parse_control_options("--stats"), ["--stats"])
+
+    def test_parse_control_options_multiple(self) -> None:
+        """Test that multiple space-separated options, including one
+        with its own value, are split into individual tokens - this
+        is the whole point: one argument listing every option."""
+        self.assertEqual(_parse_control_options("-n 0 --stats"), ["-n", "0", "--stats"])
+
+    def test_parse_control_options_quoted_value(self) -> None:
+        """Test that a quoted value keeps its embedded spaces, the
+        same way a shell would handle it."""
+        self.assertEqual(
+            _parse_control_options('--opt "a value with spaces"'),
+            ["--opt", "a value with spaces"],
+        )
+
+    def test_parse_control_options_malformed_quoting(self) -> None:
+        """Test that malformed quoting is reported as a clear error,
+        not a raw shlex traceback."""
+        with self.assertRaises(ValueError):
+            _parse_control_options('--opt "unterminated')
 
 
 class TestParseSourceSpec(TestCaseWithRedirectedLogs):
@@ -414,6 +452,24 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
             output = buf.getvalue()
         self.assertIn("hi", output)
         self.assertIn("a.", output)
+
+    def test_cmd_transform_control_options(self) -> None:
+        """Test that a -c/--control-options string listing several
+        clingo options in one go is split and passed through to the
+        underlying clingo Control without breaking the transform."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a :- b.")
+            args = _transform_namespace(
+                source=[str(source_path)],
+                meta_file=[encoding_dir / "add_var.lp"],
+                program='add_var_to_atoms("X")',
+                control_options="--stats --warn no-atom-undefined",
+            )
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cmd_transform(args)
+        self.assertEqual(buf.getvalue(), "a(X) :- b(X).\n")
 
     def test_cmd_transform_multiple_sources_default_to_stdout(self) -> None:
         """Test that with no ':DEST' suffix at all, every source's

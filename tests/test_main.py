@@ -98,8 +98,8 @@ class TestMain(TestCaseWithRedirectedLogs):
                 'aspen(print("hi")).',
                 "-p",
                 'my_program("X")',
-                "--control-option",
-                "-n 0",
+                "-c",
+                "-n 0 --stats",
                 "--facts",
             ]
         )
@@ -109,7 +109,7 @@ class TestMain(TestCaseWithRedirectedLogs):
         self.assertEqual(ret.meta_file, [Path("a.lp"), Path("b.lp")])
         self.assertEqual(ret.meta_string, 'aspen(print("hi")).')
         self.assertEqual(ret.program, 'my_program("X")')
-        self.assertEqual(ret.control_option, ["-n 0"])
+        self.assertEqual(ret.control_options, "-n 0 --stats")
         self.assertTrue(ret.facts)
         self.assertIs(ret.func, cmd_transform)
 

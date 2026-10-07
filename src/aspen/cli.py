@@ -2,6 +2,7 @@
 functionality."""
 
 import importlib
+import shlex
 import sys
 from argparse import Namespace
 from pathlib import Path
@@ -102,6 +103,13 @@ def _parse_source_spec(
     return source, (lang if lang_sep else None), dest
 
 
+def _parse_control_options(options: Optional[str]) -> list[str]:
+    """Split the '-c/--control-options' string into the individual
+    tokens clingo.Control expects, the same way a shell would split a
+    command line (so a value containing spaces can be quoted)."""
+    return shlex.split(options) if options else []
+
+
 def _parse_program(program_arg: str) -> tuple[str, tuple[Symbol, ...]]:
     """Parse a CLI program specifier such as "acid(42,d)" (or a bare
     name like "base") into the (name, args) pair AspenTree.transform
@@ -155,7 +163,7 @@ def cmd_transform(args: Namespace) -> None:
         meta_files=args.meta_file,
         meta_string=args.meta_string,
         initial_program=_parse_program(args.program),
-        control_options=args.control_option,
+        control_options=_parse_control_options(args.control_options),
     )
     if args.facts:
         _write_output(_format_facts(tree.facts), None)

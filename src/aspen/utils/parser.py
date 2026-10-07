@@ -77,7 +77,7 @@ def _add_transform_parser(subparsers: "_SubParsersAction[ArgumentParser]") -> No
             "override the default language (-l/--language) for that source, "
             "and/or by ':DEST' (e.g. 'a.lp@clingo:a-trans.lp') to send that "
             "source's transformed output to DEST instead of stdout. "
-            ":DEST' is only meaningful without --facts; "
+            "':DEST' is only meaningful without --facts; "
             "if a source starts with '-' (e.g. '-:out.lp' for stdin with a "
             "destination), put it after a literal '--'"
         ),
@@ -107,10 +107,14 @@ def _add_transform_parser(subparsers: "_SubParsersAction[ArgumentParser]") -> No
         ),
     )
     transform_parser.add_argument(
-        "--control-option",
-        action="append",
-        metavar="OPTION",
-        help="an extra option to pass to the underlying clingo Control (repeatable)",
+        "-c",
+        "--control-options",
+        metavar="OPTIONS",
+        help=(
+            "extra options to pass to the underlying clingo Control, as a "
+            "single string (e.g. '-n 0 --stats'), split the same way a shell "
+            "would - quote an individual option containing spaces"
+        ),
     )
     transform_parser.add_argument(
         "--facts",
@@ -118,7 +122,7 @@ def _add_transform_parser(subparsers: "_SubParsersAction[ArgumentParser]") -> No
         help=(
             "print the combined fact base to stdout instead of writing each "
             "source's transformed text to its own destination (see the "
-            "':EST' source syntax)"
+            "':DEST' source syntax)"
         ),
     )
     transform_parser.set_defaults(func=cmd_transform)
