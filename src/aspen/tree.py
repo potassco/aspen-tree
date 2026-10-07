@@ -81,6 +81,7 @@ class Source:
     encoding: StringEncoding
     parser: ts.Parser
     tree: ts.Tree
+    destination: Optional[Path] = None
 
 
 class AspenTree:  # pylint: disable=too-many-instance-attributes
@@ -183,8 +184,14 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         encoding: Optional[StringEncoding] = None,
         included_ranges: Optional[Sequence[ts.Range]] = None,
         identifier: Optional[Symbol] = None,
+        destination: Optional[Path] = None,
     ) -> Symbol:
-        """Parse input strings, and generate fact representation."""
+        """Parse input strings, and generate fact representation.
+
+        destination associates this source with where its text
+        should be written by a later call to write(): a path, or
+        None (the default) for stdout.
+        """
         language = language if language is not None else self.default_language
         if language is None:
             raise ValueError("No language specified, and no default language is set.")
@@ -219,12 +226,25 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 encoding,
             )
         tree = parser.parse(source_bytes, encoding=encoding)
-        processed_source = Source(identifier, source_bytes, path, encoding, parser, tree)
+        processed_source = Source(
+            identifier, source_bytes, path, encoding, parser, tree, destination
+        )
         self.sources[identifier] = processed_source
         self.facts.extend(self._reify_ts_tree(tree, processed_source))
         if path is not None:
             self.facts.append(Function("source_path", [identifier, String(str(path))]))
         return identifier
+
+    def write(self) -> None:
+        """Write every source's current text to its associated
+        destination, in the order they were parsed: a source with no
+        destination (the default) is printed to stdout."""
+        for source in self.sources.values():
+            text = source.source_bytes.decode(source.encoding)
+            if source.destination is None:
+                print(text)
+            else:
+                source.destination.write_text(text + "\n")
 
     def _reify_node_attrs(
         self, node: ts.Node, node_id: Symbol, encoding: StringEncoding

@@ -18,7 +18,6 @@ from aspen.cli import (
     _parse_program,
     _parse_source_spec,
     _read_source,
-    _write_output,
     cmd_reify,
     cmd_transform,
     resolve_language,
@@ -229,24 +228,6 @@ class TestFormatFacts(TestCaseWithRedirectedLogs):
         ASP fact ending in '.'."""
         facts = [Function("a", []), Function("b", [Number(1)])]
         self.assertEqual(_format_facts(facts), "a.\nb(1).")
-
-
-class TestWriteOutput(TestCaseWithRedirectedLogs):
-    """Test _write_output."""
-
-    def test_write_output_stdout(self) -> None:
-        """Test that output=None prints to stdout."""
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            _write_output("hello", None)
-        self.assertEqual(buf.getvalue(), "hello\n")
-
-    def test_write_output_file(self) -> None:
-        """Test that a given output path is written to instead."""
-        with tempfile.TemporaryDirectory() as tmp:
-            out_path = Path(tmp) / "out.txt"
-            _write_output("hello", out_path)
-            self.assertEqual(out_path.read_text(), "hello\n")
 
 
 class TestCmdReify(TestCaseWithRedirectedLogs):

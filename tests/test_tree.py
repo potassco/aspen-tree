@@ -1,7 +1,9 @@
 """Unit tests for module aspen.tree"""
 
+import tempfile
 from contextlib import redirect_stdout
 from io import StringIO
+from pathlib import Path
 
 # pylint: disable=import-error,no-name-in-module
 from clingo.symbol import Function, Number, String, parse_term
@@ -401,3 +403,52 @@ p(1
             meta_string='aspen(print("a.", s(0))).',
             expected_sources=["a.\n"],
         )
+
+    def test_write_default_destination_prints_to_stdout(self) -> None:
+        """Test that a source parsed with no destination (the
+        default) is printed to stdout by write()."""
+        tree = AspenTree(default_language=clingo_lang)
+        tree.parse("a :- b.")
+        with redirect_stdout(StringIO()) as buf:
+            tree.write()
+            self.assertEqual(buf.getvalue(), "a :- b.\n")
+
+    def test_write_to_file_destination(self) -> None:
+        """Test that a source parsed with a destination path has its
+        text written there instead of printed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.lp"
+            tree = AspenTree(default_language=clingo_lang)
+            tree.parse("a :- b.", destination=out_path)
+            with redirect_stdout(StringIO()) as buf:
+                tree.write()
+                self.assertEqual(buf.getvalue(), "")
+            self.assertEqual(out_path.read_text(), "a :- b.\n")
+
+    def test_write_multiple_sources_in_parse_order(self) -> None:
+        """Test that write() handles every source, in the order they
+        were parsed, each according to its own destination."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.lp"
+            tree = AspenTree(default_language=clingo_lang)
+            tree.parse("a.", destination=out_path)
+            tree.parse("b.")
+            tree.parse("c.")
+            with redirect_stdout(StringIO()) as buf:
+                tree.write()
+                self.assertEqual(buf.getvalue(), "b.\nc.\n")
+            self.assertEqual(out_path.read_text(), "a.\n")
+
+    def test_write_after_transform_writes_transformed_text(self) -> None:
+        """Test that write() reflects a source's current, possibly
+        transformed text, not its text at parse time."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.lp"
+            tree = AspenTree(default_language=clingo_lang)
+            tree.parse("a :- b.", destination=out_path)
+            tree.transform(
+                meta_files=[encoding_dir / "add_var.lp"],
+                initial_program=("add_var_to_atoms", [String("X")]),
+            )
+            tree.write()
+            self.assertEqual(out_path.read_text(), "a(X) :- b(X).\n")

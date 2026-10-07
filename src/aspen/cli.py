@@ -52,29 +52,24 @@ def _format_facts(facts: list[Symbol]) -> str:
     return "\n".join(f"{fact}." for fact in facts)
 
 
-def _write_output(text: str, output: Optional[Path]) -> None:
-    if output is None:
-        print(text)
-    else:
-        output.write_text(text + "\n")
-
-
 def _parse_sources(
-    tree: AspenTree, sources: Sequence[tuple[str, Optional[str]]]
+    tree: AspenTree, specs: Sequence[tuple[str, Optional[str], Optional[Path]]]
 ) -> list[Symbol]:
-    """Parse each given (source, lang) pair in order, returning their
-    identifiers: a source's own language (its '@LANG' suffix, already
-    split off by _parse_source_spec) overrides the tree's default
-    language when given. "-" (stdin) can only be given once, since
-    the stream can only be read once."""
-    if sum(1 for source, _ in sources if source == "-") > 1:
+    """Parse each given (source, lang, dest) spec in order, returning
+    their identifiers: a source's own language (its '@LANG' suffix)
+    overrides the tree's default language when given, and its
+    destination (its ':DEST' suffix) is recorded on the resulting
+    Source for a later AspenTree.write() call. "-" (stdin) can only
+    be given once, since the stream can only be read once."""
+    if sum(1 for source, _, _ in specs if source == "-") > 1:
         raise ValueError("stdin ('-') can only be given as a source once.")
     return [
         tree.parse(
             _read_source(source),
             language=resolve_language(lang) if lang is not None else None,
+            destination=dest,
         )
-        for source, lang in sources
+        for source, lang, dest in specs
     ]
 
 
@@ -135,16 +130,17 @@ def cmd_reify(args: Namespace) -> None:
     default_language = resolve_language(args.language) if args.language else None
     tree = AspenTree(default_language=default_language, default_encoding=args.encoding)
     specs = [_parse_source_spec(spec, allow_dest=False) for spec in args.source]
-    _parse_sources(tree, [(source, lang) for source, lang, _ in specs])
-    _write_output(_format_facts(tree.facts), None)
+    _parse_sources(tree, specs)
+    print(_format_facts(tree.facts))
 
 
 def cmd_transform(args: Namespace) -> None:
     """Run the `aspen transform` subcommand: parse one or more
     SOURCE[@LANG][:DEST] sources, apply a transformation
     meta-encoding to them, and either write out each source's
-    transformed text to its own DEST (the default) or print the
-    combined fact base to stdout (--facts)."""
+    transformed text to its own DEST (the default, via
+    AspenTree.write()) or print the combined fact base to stdout
+    (--facts)."""
     if not args.meta_file and not args.meta_string:
         raise ValueError(
             "transform requires at least one of --meta-file or --meta-string."
@@ -158,7 +154,7 @@ def cmd_transform(args: Namespace) -> None:
         )
     default_language = resolve_language(args.language) if args.language else None
     tree = AspenTree(default_language=default_language, default_encoding=args.encoding)
-    source_symbs = _parse_sources(tree, [(source, lang) for source, lang, _ in specs])
+    _parse_sources(tree, specs)
     tree.transform(
         meta_files=args.meta_file,
         meta_string=args.meta_string,
@@ -166,11 +162,9 @@ def cmd_transform(args: Namespace) -> None:
         control_options=_parse_control_options(args.control_options),
     )
     if args.facts:
-        _write_output(_format_facts(tree.facts), None)
+        print(_format_facts(tree.facts))
         return
-    for source_symb, (_, _, dest) in zip(source_symbs, specs):
-        source = tree.sources[source_symb]
-        _write_output(source.source_bytes.decode(source.encoding), dest)
+    tree.write()
 
 
 # the broad except in main() relies on this to tell genuine usage
