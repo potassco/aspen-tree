@@ -51,11 +51,17 @@ class TestMain(TestCaseWithRedirectedLogs):
         parser = get_parser()
         ret = parser.parse_args(["reify", "foo.lp", "-l", "clingo"])
         self.assertEqual(ret.command, "reify")
-        self.assertEqual(ret.source, "foo.lp")
+        self.assertEqual(ret.source, ["foo.lp"])
         self.assertEqual(ret.language, "clingo")
         self.assertEqual(ret.encoding, "utf8")
         self.assertIsNone(ret.output)
         self.assertIs(ret.func, cmd_reify)
+
+    def test_parser_reify_multiple_sources(self) -> None:
+        """Test that reify accepts multiple source positionals."""
+        parser = get_parser()
+        ret = parser.parse_args(["reify", "foo.lp", "bar.lp", "-l", "clingo"])
+        self.assertEqual(ret.source, ["foo.lp", "bar.lp"])
 
     def test_parser_transform_subcommand(self) -> None:
         """Test that the transform subcommand's arguments - including
@@ -64,7 +70,8 @@ class TestMain(TestCaseWithRedirectedLogs):
         ret = parser.parse_args(
             [
                 "transform",
-                "foo.lp",
+                "foo.lp:foo.out.lp",
+                "bar.lp:-",
                 "-l",
                 "clingo",
                 "-f",
@@ -78,15 +85,16 @@ class TestMain(TestCaseWithRedirectedLogs):
                 "--control-option",
                 "-n 0",
                 "--show",
-                "both",
+                "facts",
             ]
         )
         self.assertEqual(ret.command, "transform")
+        self.assertEqual(ret.source, ["foo.lp:foo.out.lp", "bar.lp:-"])
         self.assertEqual(ret.meta_file, [Path("a.lp"), Path("b.lp")])
         self.assertEqual(ret.meta_string, 'aspen(print("hi")).')
         self.assertEqual(ret.program, 'my_program("X")')
         self.assertEqual(ret.control_option, ["-n 0"])
-        self.assertEqual(ret.show, "both")
+        self.assertEqual(ret.show, "facts")
         self.assertIs(ret.func, cmd_transform)
 
     def test_main_runs_reify(self) -> None:

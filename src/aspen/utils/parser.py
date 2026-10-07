@@ -16,11 +16,9 @@ __all__ = ["get_parser"]
 VERSION = metadata.version("aspen-tree-5")
 
 
-def _add_source_arguments(subparser: ArgumentParser) -> None:
+def _add_source_arguments(subparser: ArgumentParser, source_help: str) -> None:
     """Arguments shared by both subcommands: what to parse, and how."""
-    subparser.add_argument(
-        "source", help="path to the source file to parse, or '-' for stdin"
-    )
+    subparser.add_argument("source", nargs="+", help=source_help)
     subparser.add_argument(
         "-l",
         "--language",
@@ -35,24 +33,29 @@ def _add_source_arguments(subparser: ArgumentParser) -> None:
         "--encoding",
         choices=["utf8", "utf16"],
         default="utf8",
-        help="text encoding of the source file [%(default)s]",
-    )
-    subparser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        default=None,
-        metavar="PATH",
-        help="write output to this file instead of stdout",
+        help="text encoding of the source file(s) [%(default)s]",
     )
 
 
 def _add_reify_parser(subparsers: "_SubParsersAction[ArgumentParser]") -> None:
     reify_parser = subparsers.add_parser(
         "reify",
-        help="Parse a source and print its reified ASP fact representation.",
+        help=(
+            "Parse one or more sources and print their combined reified "
+            "ASP fact representation."
+        ),
     )
-    _add_source_arguments(reify_parser)
+    _add_source_arguments(
+        reify_parser, "path(s) to the source file(s) to parse, or '-' for stdin"
+    )
+    reify_parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="write the combined output to this file instead of stdout",
+    )
     reify_parser.set_defaults(func=cmd_reify)
 
 
@@ -60,11 +63,21 @@ def _add_transform_parser(subparsers: "_SubParsersAction[ArgumentParser]") -> No
     transform_parser = subparsers.add_parser(
         "transform",
         help=(
-            "Parse a source, apply a transformation meta-encoding to it, "
-            "and print the result."
+            "Parse one or more sources, apply a transformation meta-encoding "
+            "to them, and print or write out each source's result."
         ),
     )
-    _add_source_arguments(transform_parser)
+    _add_source_arguments(
+        transform_parser,
+        (
+            "path(s) to the source file(s) to parse, or '-' for stdin; each "
+            "may optionally be followed by ':DEST' (e.g. 'a.lp:a-trans.lp') to "
+            "send that source's transformed output to DEST instead of stdout "
+            "- DEST may itself be '-' to say so explicitly; only meaningful "
+            "with --show source; if a source starts with '-' (e.g. '-:out.lp' "
+            "for stdin with a destination), put it after a literal '--'"
+        ),
+    )
     transform_parser.add_argument(
         "-f",
         "--meta-file",
@@ -96,9 +109,13 @@ def _add_transform_parser(subparsers: "_SubParsersAction[ArgumentParser]") -> No
     )
     transform_parser.add_argument(
         "--show",
-        choices=["source", "facts", "both"],
+        choices=["source", "facts"],
         default="source",
-        help="what to print after transforming [%(default)s]",
+        help=(
+            "'source' writes each source's transformed text to its own "
+            "destination (see the ':DEST' source syntax); 'facts' instead "
+            "always prints the combined fact base to stdout [%(default)s]"
+        ),
     )
     transform_parser.set_defaults(func=cmd_transform)
 
@@ -114,8 +131,8 @@ def get_parser() -> ArgumentParser:
             aspen is a tool for analyzing and manipulating ASTs in the
             clingo ASP language, powered by tree-sitter.
 
-            Use one of the subcommands below to reify a source into its
-            ASP fact representation, or transform it via a meta-encoding.
+            Use one of the subcommands below to reify sources into their
+            ASP fact representation, or transform them via a meta-encoding.
             """
         ),
     )

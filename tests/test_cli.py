@@ -15,6 +15,7 @@ from clingo.symbol import Function, Number, String
 from aspen.cli import (
     _format_facts,
     _parse_program,
+    _parse_source_spec,
     _read_source,
     _write_output,
     cmd_reify,
@@ -31,7 +32,6 @@ def _transform_namespace(**overrides: object) -> Namespace:
     defaults: dict[str, object] = {
         "language": "clingo",
         "encoding": "utf8",
-        "output": None,
         "meta_file": None,
         "meta_string": None,
         "program": "base",
@@ -73,6 +73,32 @@ class TestParseProgram(TestCaseWithRedirectedLogs):
         string, is rejected with a clear error."""
         with self.assertRaisesRegex(ValueError, "Invalid --program term"):
             _parse_program("42")
+
+
+class TestParseSourceSpec(TestCaseWithRedirectedLogs):
+    """Test _parse_source_spec."""
+
+    def test_parse_source_spec_no_colon(self) -> None:
+        """Test that a source with no ':' at all defaults to stdout."""
+        self.assertEqual(_parse_source_spec("a.lp"), ("a.lp", None))
+
+    def test_parse_source_spec_explicit_stdout(self) -> None:
+        """Test that ':-' makes the default to stdout explicit."""
+        self.assertEqual(_parse_source_spec("a.lp:-"), ("a.lp", None))
+
+    def test_parse_source_spec_file_destination(self) -> None:
+        """Test that ':DEST' routes to a file destination."""
+        self.assertEqual(
+            _parse_source_spec("a.lp:a-trans.lp"), ("a.lp", Path("a-trans.lp"))
+        )
+
+    def test_parse_source_spec_stdin_no_colon(self) -> None:
+        """Test that bare stdin ('-') defaults to stdout."""
+        self.assertEqual(_parse_source_spec("-"), ("-", None))
+
+    def test_parse_source_spec_stdin_with_destination(self) -> None:
+        """Test that stdin can be routed to a file via '-:DEST'."""
+        self.assertEqual(_parse_source_spec("-:out.lp"), ("-", Path("out.lp")))
 
 
 class TestResolveLanguage(TestCaseWithRedirectedLogs):
@@ -150,7 +176,10 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
             source_path = Path(tmp) / "in.lp"
             source_path.write_text("a.")
             args = Namespace(
-                source=str(source_path), language="clingo", encoding="utf8", output=None
+                source=[str(source_path)],
+                language="clingo",
+                encoding="utf8",
+                output=None,
             )
             buf = io.StringIO()
             with redirect_stdout(buf):
@@ -161,13 +190,45 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
 
     def test_cmd_reify_stdin(self) -> None:
         """Test that cmd_reify also accepts '-' for stdin."""
-        args = Namespace(source="-", language="clingo", encoding="utf8", output=None)
+        args = Namespace(source=["-"], language="clingo", encoding="utf8", output=None)
         buf = io.StringIO()
         with patch.object(sys, "stdin") as mock_stdin:
             mock_stdin.buffer = io.BytesIO(b"a.")
             with redirect_stdout(buf):
                 cmd_reify(args)
         self.assertIn('language(s(0),"clingo").', buf.getvalue())
+
+    def test_cmd_reify_multiple_sources(self) -> None:
+        """Test that cmd_reify parses multiple sources in order and
+        prints their combined fact base, sharing one identifier
+        namespace."""
+        with tempfile.TemporaryDirectory() as tmp:
+            first_path = Path(tmp) / "first.lp"
+            first_path.write_text("a.")
+            second_path = Path(tmp) / "second.lp"
+            second_path.write_text("b.")
+            args = Namespace(
+                source=[str(first_path), str(second_path)],
+                language="clingo",
+                encoding="utf8",
+                output=None,
+            )
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cmd_reify(args)
+            output = buf.getvalue()
+        self.assertIn('language(s(0),"clingo").', output)
+        self.assertIn('language(s(1),"clingo").', output)
+
+    def test_cmd_reify_stdin_twice_rejected(self) -> None:
+        """Test that using '-' more than once is rejected with a
+        clear error, rather than silently reading an empty source the
+        second time."""
+        args = Namespace(
+            source=["-", "-"], language="clingo", encoding="utf8", output=None
+        )
+        with self.assertRaisesRegex(ValueError, "stdin"):
+            cmd_reify(args)
 
 
 class TestCmdTransform(TestCaseWithRedirectedLogs):
@@ -176,7 +237,7 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
     def test_cmd_transform_requires_meta_source(self) -> None:
         """Test that transform refuses to run with neither --meta-file
         nor --meta-string given."""
-        args = _transform_namespace(source="unused")
+        args = _transform_namespace(source=["unused"])
         with self.assertRaisesRegex(ValueError, "meta-file.*meta-string"):
             cmd_transform(args)
 
@@ -189,7 +250,7 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
             source_path = Path(tmp) / "in.lp"
             source_path.write_text("a :- b.")
             args = _transform_namespace(
-                source=str(source_path),
+                source=[str(source_path)],
                 meta_file=[encoding_dir / "add_var.lp"],
                 program='add_var_to_atoms("X")',
             )
@@ -205,7 +266,7 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
             source_path = Path(tmp) / "in.lp"
             source_path.write_text("a :- b.")
             args = _transform_namespace(
-                source=str(source_path),
+                source=[str(source_path)],
                 meta_file=[encoding_dir / "add_var.lp"],
                 program='add_var_to_atoms("X")',
                 show="facts",
@@ -217,25 +278,38 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
         self.assertIn('language(s(0),"clingo").', output)
         self.assertNotIn("a(X) :- b(X).", output)
 
-    def test_cmd_transform_show_both(self) -> None:
-        """Test that --show both prints the source text and the fact
-        base, in that order."""
+    def test_cmd_transform_show_facts_rejects_destination(self) -> None:
+        """Test that --show facts rejects a ':DEST' on any source: it
+        makes no sense there, since the combined fact base always
+        goes to stdout."""
         with tempfile.TemporaryDirectory() as tmp:
             source_path = Path(tmp) / "in.lp"
             source_path.write_text("a :- b.")
             args = _transform_namespace(
-                source=str(source_path),
+                source=[f"{source_path}:{Path(tmp) / 'out.lp'}"],
                 meta_file=[encoding_dir / "add_var.lp"],
                 program='add_var_to_atoms("X")',
-                show="both",
+                show="facts",
+            )
+            with self.assertRaisesRegex(ValueError, ":DEST.*--show.*facts"):
+                cmd_transform(args)
+
+    def test_cmd_transform_show_facts_allows_explicit_stdout(self) -> None:
+        """Test that --show facts tolerates an explicit ':-' (stdout)
+        on a source, since it doesn't actually request a destination."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a :- b.")
+            args = _transform_namespace(
+                source=[f"{source_path}:-"],
+                meta_file=[encoding_dir / "add_var.lp"],
+                program='add_var_to_atoms("X")',
+                show="facts",
             )
             buf = io.StringIO()
             with redirect_stdout(buf):
                 cmd_transform(args)
-            output = buf.getvalue()
-        source_part, facts_part = output.split("\n", 1)
-        self.assertEqual(source_part, "a(X) :- b(X).")
-        self.assertIn('language(s(0),"clingo").', facts_part)
+        self.assertIn('language(s(0),"clingo").', buf.getvalue())
 
     def test_cmd_transform_with_meta_string(self) -> None:
         """Test that --meta-string works without any --meta-file."""
@@ -243,7 +317,7 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
             source_path = Path(tmp) / "in.lp"
             source_path.write_text("a.")
             args = _transform_namespace(
-                source=str(source_path),
+                source=[str(source_path)],
                 meta_string='aspen(print("hi")) :- #true.',
             )
             buf = io.StringIO()
@@ -252,3 +326,104 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
             output = buf.getvalue()
         self.assertIn("hi", output)
         self.assertIn("a.", output)
+
+    def test_cmd_transform_multiple_sources_default_to_stdout(self) -> None:
+        """Test that with no ':DEST' suffix at all, every source's
+        result is printed to stdout, in order."""
+        with tempfile.TemporaryDirectory() as tmp:
+            first_path = Path(tmp) / "first.lp"
+            first_path.write_text("a :- b.")
+            second_path = Path(tmp) / "second.lp"
+            second_path.write_text("c :- d.")
+            args = _transform_namespace(
+                source=[str(first_path), str(second_path)],
+                meta_file=[encoding_dir / "add_var.lp"],
+                program='add_var_to_atoms("X")',
+            )
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cmd_transform(args)
+        self.assertEqual(buf.getvalue(), "a(X) :- b(X).\nc(X) :- d(X).\n")
+
+    def test_cmd_transform_multiple_sources_separate_destinations(self) -> None:
+        """Test that a ':DEST' suffix on each source, in order, sends
+        each source's result to its own file instead of stdout, while
+        a source with no suffix still defaults to stdout."""
+        with tempfile.TemporaryDirectory() as tmp:
+            first_path = Path(tmp) / "first.lp"
+            first_path.write_text("a :- b.")
+            second_path = Path(tmp) / "second.lp"
+            second_path.write_text("c :- d.")
+            first_out = Path(tmp) / "first.out.lp"
+            args = _transform_namespace(
+                source=[f"{first_path}:{first_out}", str(second_path)],
+                meta_file=[encoding_dir / "add_var.lp"],
+                program='add_var_to_atoms("X")',
+            )
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cmd_transform(args)
+            self.assertEqual(first_out.read_text(), "a(X) :- b(X).\n")
+            self.assertEqual(buf.getvalue(), "c(X) :- d(X).\n")
+
+    def test_cmd_transform_source_explicit_stdout(self) -> None:
+        """Test that ':-' explicitly routes a source's result to
+        stdout, same as omitting the suffix entirely."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a :- b.")
+            args = _transform_namespace(
+                source=[f"{source_path}:-"],
+                meta_file=[encoding_dir / "add_var.lp"],
+                program='add_var_to_atoms("X")',
+            )
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cmd_transform(args)
+        self.assertEqual(buf.getvalue(), "a(X) :- b(X).\n")
+
+    def test_cmd_transform_stdin_with_destination(self) -> None:
+        """Test that stdin's result can be routed to a file via
+        '-:DEST', just like any other source."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.lp"
+            args = _transform_namespace(
+                source=[f"-:{out_path}"],
+                meta_file=[encoding_dir / "add_var.lp"],
+                program='add_var_to_atoms("X")',
+            )
+            with patch.object(sys, "stdin") as mock_stdin:
+                mock_stdin.buffer = io.BytesIO(b"a :- b.")
+                cmd_transform(args)
+            self.assertEqual(out_path.read_text(), "a(X) :- b(X).\n")
+
+    def test_cmd_transform_mixed_sources_and_destinations(self) -> None:
+        """Test a mix of stdin and file sources, each independently
+        defaulting to stdout or routed to its own file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            file_path = Path(tmp) / "file.lp"
+            file_path.write_text("c :- d.")
+            file_out = Path(tmp) / "file.out.lp"
+            args = _transform_namespace(
+                source=["-", f"{file_path}:{file_out}"],
+                meta_file=[encoding_dir / "add_var.lp"],
+                program='add_var_to_atoms("X")',
+            )
+            buf = io.StringIO()
+            with patch.object(sys, "stdin") as mock_stdin:
+                mock_stdin.buffer = io.BytesIO(b"a :- b.")
+                with redirect_stdout(buf):
+                    cmd_transform(args)
+            self.assertEqual(buf.getvalue(), "a(X) :- b(X).\n")
+            self.assertEqual(file_out.read_text(), "c(X) :- d(X).\n")
+
+    def test_cmd_transform_stdin_twice_rejected(self) -> None:
+        """Test that using '-' more than once is rejected with a
+        clear error, rather than silently reading an empty source the
+        second time."""
+        args = _transform_namespace(
+            source=["-", "-"],
+            meta_string='aspen(print("hi")) :- #true.',
+        )
+        with self.assertRaisesRegex(ValueError, "stdin"):
+            cmd_transform(args)
