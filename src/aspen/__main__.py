@@ -4,7 +4,8 @@ The main entry point for the application.
 
 import sys
 
-from .utils.log import configure_logging, get_logger
+from .cli import CLI_ERRORS
+from .utils.log import configure_logging
 from .utils.parser import get_parser
 
 
@@ -16,11 +17,15 @@ def main() -> None:
     args = parser.parse_args()
     configure_logging(sys.stderr, args.log, sys.stderr.isatty())
 
-    log = get_logger("main")
-    log.info("info")
-    log.warning("warning")
-    log.debug("debug")
-    log.error("error")
+    if not hasattr(args, "func"):
+        parser.print_help()
+        sys.exit(1)
+
+    try:
+        args.func(args)
+    except CLI_ERRORS as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
