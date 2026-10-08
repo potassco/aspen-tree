@@ -31,10 +31,13 @@ class AspenTestCase(TestCaseWithRedirectedLogs):
         source: SourceInput,
         path: Path,
         additional_expected_facts: Optional[list[Symbol]] = None,
+        raise_syntax_errors: bool = True,
     ) -> None:
         """Assert that parsing string of the given language results in
         symbols contained in the given file."""
-        tree = AspenTree(default_language=language)
+        tree = AspenTree(
+            default_language=language, raise_syntax_errors=raise_syntax_errors
+        )
         tree.parse(source)
         # we have to parse and then turn back into string due to
         # clingo6 bug: https://github.com/potassco/clingo/issues/579

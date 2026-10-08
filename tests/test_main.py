@@ -54,7 +54,17 @@ class TestMain(TestCaseWithRedirectedLogs):
         self.assertEqual(ret.source, ["foo.lp"])
         self.assertEqual(ret.language, "clingo")
         self.assertEqual(ret.encoding, "utf8")
+        self.assertFalse(ret.allow_syntax_errors)
         self.assertIs(ret.func, cmd_reify)
+
+    def test_parser_reify_allow_syntax_errors_flag(self) -> None:
+        """Test that --allow-syntax-errors is available on reify too,
+        since it's shared with transform via source arguments."""
+        parser = get_parser()
+        ret = parser.parse_args(
+            ["reify", "foo.lp", "-l", "clingo", "--allow-syntax-errors"]
+        )
+        self.assertTrue(ret.allow_syntax_errors)
 
     def test_parser_reify_language_defaults_to_none(self) -> None:
         """Test that -l/--language is optional: with every source
@@ -101,6 +111,7 @@ class TestMain(TestCaseWithRedirectedLogs):
                 "-c",
                 "-n 0 --stats",
                 "--facts",
+                "--allow-syntax-errors",
             ]
         )
         self.assertEqual(ret.command, "transform")
@@ -111,6 +122,7 @@ class TestMain(TestCaseWithRedirectedLogs):
         self.assertEqual(ret.program, 'my_program("X")')
         self.assertEqual(ret.control_options, "-n 0 --stats")
         self.assertTrue(ret.facts)
+        self.assertTrue(ret.allow_syntax_errors)
         self.assertIs(ret.func, cmd_transform)
 
     def test_parser_transform_facts_defaults_false(self) -> None:
@@ -119,6 +131,28 @@ class TestMain(TestCaseWithRedirectedLogs):
         parser = get_parser()
         ret = parser.parse_args(["transform", "foo.lp", "-l", "clingo"])
         self.assertFalse(ret.facts)
+
+    def test_main_reports_syntax_error_and_exits(self) -> None:
+        """Test that a syntax error raised during parsing (the
+        default) is reported on stderr like any other CLI error,
+        not as a raw traceback."""
+        out_buf = StringIO()
+        err_buf = StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a :- b")
+            with (
+                patch.object(
+                    sys, "argv", ["aspen", "reify", str(source_path), "-l", "clingo"]
+                ),
+                patch.object(sys, "stdout", out_buf),
+                patch.object(sys, "stderr", err_buf),
+            ):
+                with self.assertRaises(SystemExit) as ctx:
+                    main()
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("error:", err_buf.getvalue())
+        self.assertIn("missing '.'", err_buf.getvalue())
 
     def test_main_runs_reify(self) -> None:
         """Test that main() dispatches to the reify command and

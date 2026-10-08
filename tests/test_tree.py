@@ -109,9 +109,14 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
         )
 
     def test_reify_error_missing_node(self) -> None:
-        """Test reification of error and missing node."""
+        """Test reification of error and missing node. Disables the
+        default syntax-error-raising behavior, since this test is
+        specifically about the reified representation of such nodes."""
         self.assert_parse_equals_file(
-            clingo_lang, "+a.", output_dir / "error_missing_reified.txt"
+            clingo_lang,
+            "+a.",
+            output_dir / "error_missing_reified.txt",
+            raise_syntax_errors=False,
         )
 
     def test_parse_no_lang(self) -> None:
@@ -329,48 +334,87 @@ p(1
             meta_files=[encoding_dir / "raise_error_no_loc.lp"],
         )
 
-    def test_transform_raises_syntax_error_missing(self) -> None:
-        """Test that a missing-token syntax error reports its location,
-        the offending source line with a caret, and the missing token -
-        but no "expected" hint, since node.type already is the answer.
-        """
-        self.assert_transform_raises(
-            message_regex=(r"line 1, column 7: missing '\.'\n" r"a :- b\n" r"      \^"),
-            language=clingo_lang,
-            sources=["a :- b"],
-            meta_files=[generic_util_path / "raise_syntax_error.lp"],
-        )
+    def test_parse_raises_syntax_error_missing(self) -> None:
+        """Test that a missing-token syntax error is raised
+        immediately after parsing (the default), reporting its
+        location, the offending source line with a caret, and the
+        missing token - but no "expected" hint, since node.type
+        already is the answer."""
+        tree = AspenTree(default_language=clingo_lang)
+        with self.assertRaisesRegex(
+            TransformError,
+            r"line 1, column 7: missing '\.'\na :- b\n      \^",
+        ):
+            tree.parse("a :- b")
 
-    def test_transform_raises_syntax_error_with_hint(self) -> None:
+    def test_parse_raises_syntax_error_with_hint(self) -> None:
         """Test that an ERROR node whose lookahead set is short and
         specific gets an "expected one of: ..." hint appended - the
-        parser consumed the valid keyword '#sum' and stranded the typo'd
-        trailing 'a' right before the '{' it wanted.
-        """
-        self.assert_transform_raises(
-            message_regex=(
+        parser consumed the valid keyword '#sum' and stranded the
+        typo'd trailing 'a' right before the '{' it wanted. Raised
+        immediately after parsing, like any other syntax error."""
+        tree = AspenTree(default_language=clingo_lang)
+        with self.assertRaisesRegex(
+            TransformError,
+            (
                 r"line 1, column 10: unexpected 'a', expected one of: \{\n"
                 r"a :- #suma\{X : b\(X\)\} = 2\.\n"
                 r"         \^"
             ),
-            language=clingo_lang,
-            sources=["a :- #suma{X : b(X)} = 2."],
-            meta_files=[generic_util_path / "raise_syntax_error.lp"],
-        )
+        ):
+            tree.parse("a :- #suma{X : b(X)} = 2.")
 
-    def test_transform_raises_syntax_error_without_hint(self) -> None:
+    def test_parse_raises_syntax_error_without_hint(self) -> None:
         """Test that an ERROR node whose lookahead set is long (a
         generic, heavily-reused continuation point, not a specific
         expectation) gets no "expected" hint - a long list would just
         be noise, not a pointer to the mistake."""
         tree = AspenTree(default_language=clingo_lang)
-        tree.parse("a(1,,2).")
         with self.assertRaisesRegex(
             TransformError,
             r"line 1, column 4: unexpected ','\na\(1,,2\)\.\n   \^",
         ) as ctx:
-            tree.transform(meta_files=[generic_util_path / "raise_syntax_error.lp"])
+            tree.parse("a(1,,2).")
         self.assertNotIn("expected one of", str(ctx.exception))
+
+    def test_parse_raises_multiple_syntax_errors_sorted_by_position(self) -> None:
+        """Test that several syntax errors found while reifying one
+        source are all collected and raised together, in document
+        order - not whatever order the subtree walk happened to visit
+        them in."""
+        tree = AspenTree(default_language=clingo_lang)
+        with self.assertRaisesRegex(
+            TransformError,
+            (
+                r"line 1, column 10: unexpected 'a', expected one of: \{\n"
+                r"a :- #suma\{X : b\(X\)\} = 2\.\n"
+                r"         \^\n"
+                r"line 2, column 7: missing '\.'\nc :- d\n      \^"
+            ),
+        ):
+            tree.parse("a :- #suma{X : b(X)} = 2.\nc :- d")
+
+    def test_parse_syntax_errors_can_be_disabled(self) -> None:
+        """Test that raise_syntax_errors=False lets parse() succeed
+        even with syntax errors in the source, leaving the usual
+        error(Node)/missing(Node) facts for the caller to inspect or
+        act on instead."""
+        tree = AspenTree(default_language=clingo_lang, raise_syntax_errors=False)
+        tree.parse("a :- b")
+        self.assertTrue(any(f.match("missing", 1) for f in tree.facts))
+
+    def test_transform_raise_syntax_error_lp_still_works_when_disabled(self) -> None:
+        """Test that the older, explicit raise_syntax_error.lp
+        transform-time mechanism remains usable by anyone who disables
+        the automatic parse-time check - it derives the same
+        exception from the same error(Node)/missing(Node) facts."""
+        tree = AspenTree(default_language=clingo_lang, raise_syntax_errors=False)
+        tree.parse("a :- b")
+        with self.assertRaisesRegex(
+            TransformError,
+            r"line 1, column 7: missing '\.'\na :- b\n      \^",
+        ):
+            tree.transform(meta_files=[generic_util_path / "raise_syntax_error.lp"])
 
     def test_transform_print(self) -> None:
         """Test that aspen(print(String)) symbols derived during

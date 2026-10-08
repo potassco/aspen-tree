@@ -104,10 +104,12 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         default_encoding: StringEncoding = "utf8",
         id_generator: Optional[Generator[Symbol, None, None]] = None,
         textio_symbols: Optional[dict[Symbol, TextIOBase]] = None,
+        raise_syntax_errors: bool = True,
     ):
         self.sources: dict[Symbol, Source] = {}
         self.default_language = default_language
         self.default_encoding = default_encoding
+        self.raise_syntax_errors = raise_syntax_errors
         self.facts: List[Symbol] = []
         self.next_transform_program: Optional[tuple[str, Sequence[Symbol]]] = None
         self.textio_symbols = {} if textio_symbols is None else textio_symbols
@@ -272,19 +274,28 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         return facts
 
     def _reify_ts_subtree(
-        self, subtree_root_node: ts.Node, encoding: StringEncoding
+        self, subtree_root_node: ts.Node, source: Source
     ) -> list[Symbol]:
         """Reify tree-sitter subtree with input root node into a list of facts.
 
         The first element of this list is guarenteed to be the node/1
         fact corresponding to the root of the subtree.
+
+        Collects any ERROR/MISSING nodes found while walking the
+        subtree, and - when self.raise_syntax_errors is set (the
+        default) - raises a TransformError for them immediately after
+        reification, rather than waiting for a transformation to
+        query for them.
         """
         subtree_root_id = next(self._id_generator)
         stack: list[tuple[Symbol, ts.Node]] = [(subtree_root_id, subtree_root_node)]
         facts: list[Symbol] = []
+        syntax_error_nodes: list[ts.Node] = []
         while len(stack) > 0:
             parent_id, parent = stack.pop()
-            facts.extend(self._reify_node_attrs(parent, parent_id, encoding))
+            facts.extend(self._reify_node_attrs(parent, parent_id, source.encoding))
+            if parent.is_error or parent.is_missing:
+                syntax_error_nodes.append(parent)
             prev_child_id: Optional[Symbol] = None
             for idx, child in enumerate(parent.children):
                 child_id = next(self._id_generator)
@@ -300,6 +311,17 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                     facts.append(Function("field", [child_id, String(field_name)]))
                 prev_child_id = child_id
                 stack.append((child_id, child))
+        if self.raise_syntax_errors and syntax_error_nodes:
+            language = source.parser.language
+            assert language is not None
+            syntax_error_nodes.sort(
+                key=lambda node: (node.start_point.row, node.start_point.column)
+            )
+            messages = [
+                format_syntax_error(node, source.source_bytes, source.encoding, language)
+                for node in syntax_error_nodes
+            ]
+            raise TransformError("\n".join(messages))
         return facts
 
     def _reify_ts_tree(self, tree: ts.Tree, source: Source) -> list[Symbol]:
@@ -320,7 +342,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             ],
         )
         facts.append(lang_fact)
-        tree_facts = self._reify_ts_subtree(root_node, source.encoding)
+        tree_facts = self._reify_ts_subtree(root_node, source)
         root_id = tree_facts[0].arguments[0]
         facts.append(Function("source_root", [source.id, root_id]))
         facts.extend(tree_facts)
@@ -935,9 +957,8 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
 
         """
         facts: list[Symbol] = []
-        encoding = source.encoding
         for idx, node in enumerate(siblings):
-            subtree_facts = self._reify_ts_subtree(node, encoding)
+            subtree_facts = self._reify_ts_subtree(node, source)
             node_id = subtree_facts[0].arguments[0]
             facts.extend(subtree_facts)
             if prev_sibling is not None:

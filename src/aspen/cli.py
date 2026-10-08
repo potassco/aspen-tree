@@ -128,7 +128,11 @@ def cmd_reify(args: Namespace) -> None:
     SOURCE[@LANG] sources and print their combined reified ASP fact
     representation to stdout."""
     default_language = resolve_language(args.language) if args.language else None
-    tree = AspenTree(default_language=default_language, default_encoding=args.encoding)
+    tree = AspenTree(
+        default_language=default_language,
+        default_encoding=args.encoding,
+        raise_syntax_errors=not args.allow_syntax_errors,
+    )
     specs = [_parse_source_spec(spec, allow_dest=False) for spec in args.source]
     _parse_sources(tree, specs)
     print(_format_facts(tree.facts))
@@ -153,7 +157,11 @@ def cmd_transform(args: Namespace) -> None:
             "printed to stdout."
         )
     default_language = resolve_language(args.language) if args.language else None
-    tree = AspenTree(default_language=default_language, default_encoding=args.encoding)
+    tree = AspenTree(
+        default_language=default_language,
+        default_encoding=args.encoding,
+        raise_syntax_errors=not args.allow_syntax_errors,
+    )
     _parse_sources(tree, specs)
     tree.transform(
         meta_files=args.meta_file,

@@ -39,6 +39,14 @@ def _add_source_arguments(subparser: ArgumentParser, source_help: str) -> None:
         default="utf8",
         help="text encoding of the source file(s) [%(default)s]",
     )
+    subparser.add_argument(
+        "--allow-syntax-errors",
+        action="store_true",
+        help=(
+            "parse sources even if they contain syntax errors (ERROR/MISSING "
+            "nodes), instead of raising immediately [default: raise]"
+        ),
+    )
 
 
 def _add_reify_parser(subparsers: "_SubParsersAction[ArgumentParser]") -> None:

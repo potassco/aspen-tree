@@ -22,9 +22,21 @@ from aspen.cli import (
     cmd_transform,
     resolve_language,
 )
+from aspen.tree import TransformError
 from aspen.utils.log import TestCaseWithRedirectedLogs
 
 from .common import encoding_dir
+
+
+def _reify_namespace(**overrides: object) -> Namespace:
+    """Default Namespace for cmd_reify, with any field overridden."""
+    defaults: dict[str, object] = {
+        "language": "clingo",
+        "encoding": "utf8",
+        "allow_syntax_errors": False,
+    }
+    defaults.update(overrides)
+    return Namespace(**defaults)
 
 
 def _transform_namespace(**overrides: object) -> Namespace:
@@ -32,6 +44,7 @@ def _transform_namespace(**overrides: object) -> Namespace:
     defaults: dict[str, object] = {
         "language": "clingo",
         "encoding": "utf8",
+        "allow_syntax_errors": False,
         "meta_file": None,
         "meta_string": None,
         "program": "base",
@@ -239,11 +252,7 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
         with tempfile.TemporaryDirectory() as tmp:
             source_path = Path(tmp) / "in.lp"
             source_path.write_text("a.")
-            args = Namespace(
-                source=[str(source_path)],
-                language="clingo",
-                encoding="utf8",
-            )
+            args = _reify_namespace(source=[str(source_path)])
             buf = io.StringIO()
             with redirect_stdout(buf):
                 cmd_reify(args)
@@ -253,7 +262,7 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
 
     def test_cmd_reify_stdin(self) -> None:
         """Test that cmd_reify also accepts '-' for stdin."""
-        args = Namespace(source=["-"], language="clingo", encoding="utf8")
+        args = _reify_namespace(source=["-"])
         buf = io.StringIO()
         with patch.object(sys, "stdin") as mock_stdin:
             mock_stdin.buffer = io.BytesIO(b"a.")
@@ -270,11 +279,7 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
             first_path.write_text("a.")
             second_path = Path(tmp) / "second.lp"
             second_path.write_text("b.")
-            args = Namespace(
-                source=[str(first_path), str(second_path)],
-                language="clingo",
-                encoding="utf8",
-            )
+            args = _reify_namespace(source=[str(first_path), str(second_path)])
             buf = io.StringIO()
             with redirect_stdout(buf):
                 cmd_reify(args)
@@ -286,7 +291,7 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
         """Test that using '-' more than once is rejected with a
         clear error, rather than silently reading an empty source the
         second time."""
-        args = Namespace(source=["-", "-"], language="clingo", encoding="utf8")
+        args = _reify_namespace(source=["-", "-"])
         with self.assertRaisesRegex(ValueError, "stdin"):
             cmd_reify(args)
 
@@ -296,11 +301,7 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
         with tempfile.TemporaryDirectory() as tmp:
             source_path = Path(tmp) / "in.lp"
             source_path.write_text("a.")
-            args = Namespace(
-                source=[f"{source_path}@aspcore2"],
-                language="clingo",
-                encoding="utf8",
-            )
+            args = _reify_namespace(source=[f"{source_path}@aspcore2"])
             buf = io.StringIO()
             with redirect_stdout(buf):
                 cmd_reify(args)
@@ -312,9 +313,7 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
         with tempfile.TemporaryDirectory() as tmp:
             source_path = Path(tmp) / "in.lp"
             source_path.write_text("a.")
-            args = Namespace(
-                source=[f"{source_path}@clingo"], language=None, encoding="utf8"
-            )
+            args = _reify_namespace(source=[f"{source_path}@clingo"], language=None)
             buf = io.StringIO()
             with redirect_stdout(buf):
                 cmd_reify(args)
@@ -326,16 +325,38 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
         with tempfile.TemporaryDirectory() as tmp:
             source_path = Path(tmp) / "in.lp"
             source_path.write_text("a.")
-            args = Namespace(source=[str(source_path)], language=None, encoding="utf8")
+            args = _reify_namespace(source=[str(source_path)], language=None)
             with self.assertRaisesRegex(ValueError, "[Nn]o.*language"):
                 cmd_reify(args)
 
     def test_cmd_reify_rejects_destination_suffix(self) -> None:
         """Test that reify rejects a ':DEST' suffix on any source:
         reify always writes its combined output to stdout."""
-        args = Namespace(source=["a.lp:out.lp"], language="clingo", encoding="utf8")
+        args = _reify_namespace(source=["a.lp:out.lp"])
         with self.assertRaisesRegex(ValueError, "not accepted here"):
             cmd_reify(args)
+
+    def test_cmd_reify_raises_syntax_error_by_default(self) -> None:
+        """Test that a source with a syntax error raises immediately,
+        by default, rather than silently reifying it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a :- b")
+            args = _reify_namespace(source=[str(source_path)])
+            with self.assertRaisesRegex(TransformError, "missing '\\.'"):
+                cmd_reify(args)
+
+    def test_cmd_reify_allow_syntax_errors(self) -> None:
+        """Test that --allow-syntax-errors lets reify succeed on a
+        source with a syntax error, instead of raising."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a :- b")
+            args = _reify_namespace(source=[str(source_path)], allow_syntax_errors=True)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cmd_reify(args)
+        self.assertIn("missing(", buf.getvalue())
 
 
 class TestCmdTransform(TestCaseWithRedirectedLogs):
@@ -347,6 +368,37 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
         args = _transform_namespace(source=["unused"])
         with self.assertRaisesRegex(ValueError, "meta-file.*meta-string"):
             cmd_transform(args)
+
+    def test_cmd_transform_raises_syntax_error_by_default(self) -> None:
+        """Test that a source with a syntax error raises immediately,
+        by default, rather than silently transforming it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a :- b")
+            args = _transform_namespace(
+                source=[str(source_path)],
+                meta_file=[encoding_dir / "add_var.lp"],
+                program='add_var_to_atoms("X")',
+            )
+            with self.assertRaisesRegex(TransformError, "missing '\\.'"):
+                cmd_transform(args)
+
+    def test_cmd_transform_allow_syntax_errors(self) -> None:
+        """Test that --allow-syntax-errors lets transform succeed on a
+        source with a syntax error, instead of raising."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a :- b")
+            args = _transform_namespace(
+                source=[str(source_path)],
+                meta_file=[encoding_dir / "add_var.lp"],
+                program='add_var_to_atoms("X")',
+                allow_syntax_errors=True,
+            )
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cmd_transform(args)
+        self.assertEqual(buf.getvalue(), "a(X) :- b(X)\n")
 
     def test_cmd_transform_prints_transformed_source_by_default(self) -> None:
         """Test that transform reifies the source, applies the given
