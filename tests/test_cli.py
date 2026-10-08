@@ -2,6 +2,7 @@
 transform` command implementations)."""
 
 import io
+import re
 import sys
 import tempfile
 from argparse import Namespace
@@ -338,12 +339,28 @@ class TestCmdReify(TestCaseWithRedirectedLogs):
 
     def test_cmd_reify_raises_syntax_error_by_default(self) -> None:
         """Test that a source with a syntax error raises immediately,
-        by default, rather than silently reifying it."""
+        by default, rather than silently reifying it - and that the
+        message is prefixed with the source's own file path, so the
+        user can tell which file it came from."""
         with tempfile.TemporaryDirectory() as tmp:
             source_path = Path(tmp) / "in.lp"
             source_path.write_text("a :- b")
             args = _reify_namespace(source=[str(source_path)])
-            with self.assertRaisesRegex(TransformError, "missing '\\.'"):
+            expected_path = re.escape(str(source_path.resolve()))
+            with self.assertRaisesRegex(
+                TransformError, f"^{expected_path}:1:6: missing '\\.'"
+            ):
+                cmd_reify(args)
+
+    def test_cmd_reify_raises_syntax_error_stdin(self) -> None:
+        """Test that a syntax error from a stdin source is prefixed
+        with its source id (e.g. 's(0)'), rather than a file path,
+        since stdin has none - so the user can tell it came from
+        stdin."""
+        args = _reify_namespace(source=["-"])
+        with patch.object(sys, "stdin") as mock_stdin:
+            mock_stdin.buffer = io.BytesIO(b"a :- b")
+            with self.assertRaisesRegex(TransformError, r"^s\(0\):1:6: missing '\.'"):
                 cmd_reify(args)
 
     def test_cmd_reify_allow_syntax_errors(self) -> None:

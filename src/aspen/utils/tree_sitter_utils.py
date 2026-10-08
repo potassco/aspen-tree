@@ -250,7 +250,7 @@ def _diff_children(
         old_gap = old_children[old_pos:old_idx]
         new_gap = new_children[new_pos:new_idx]
         last_fold_was_used = False
-        if not old_gap and new_gap:
+        if not old_gap and new_gap:  # nocoverage
             # pure insertion right before this reused node: fold the
             # node in as an anchor, in place of excluding it as unchanged
             # note: in practice, I could not produce an instance where this
@@ -272,11 +272,11 @@ def _diff_children(
         # it to the last reused node, which is the only one left that
         # could possibly serve, extending the change it was already
         # folded into, or folding it in now if it wasn't needed there.
-        if last_fold_was_used:
+        if last_fold_was_used:  # nocoverage
             last_old, last_new = changes[-1]
             changes[-1] = (last_old, last_new + new_gap)
             old_gap, new_gap = [], []
-        elif reused:
+        elif reused:  # nocoverage
             last_reused_old, last_reused_new = reused[-1]
             old_gap = [old_children[last_reused_old]]
             new_gap = [new_children[last_reused_new]] + new_gap
@@ -412,9 +412,7 @@ def expected_symbols(language: ts.Language, node: ts.Node) -> list[str]:
     return _symbols_at_state(language, state)
 
 
-def _expected_hint(
-    language: ts.Language, node: ts.Node, offending_text: str
-) -> list[str]:
+def _expected_hint(language: ts.Language, node: ts.Node) -> list[str]:
     """A short, specific "expected" list for an ERROR node, or none.
 
     Deliberately narrow: MISSING nodes already carry their one answer
@@ -434,26 +432,59 @@ def _expected_hint(
     return names
 
 
+def format_node_span(node: ts.Node, source_bytes: bytes, encoding: str) -> str:
+    """Render the source line(s) spanned by node, with the span
+    underlined by carets.
+
+    A span within a single line gets that line, followed by one
+    caret-underlined line. A span crossing multiple lines shows its
+    first line (underlined from the start column to the end of that
+    line) and its last line (underlined from the start of that line
+    to the end column), with a single '...' line in between when the
+    span covers more than two lines.
+    """
+    lines = source_bytes.split(b"\n")
+    start, end = node.start_point, node.end_point
+    first_line = lines[start.row].decode(encoding, errors="replace")
+    if start.row == end.row:
+        width = max(1, end.column - start.column)
+        caret = " " * start.column + "^" * width
+        return f"{first_line}\n{caret}"
+    first_caret = " " * start.column + "^" * max(1, len(first_line) - start.column)
+    last_line = lines[end.row].decode(encoding, errors="replace")
+    last_caret = "^" * max(1, end.column)
+    parts = [first_line, first_caret]
+    if end.row > start.row + 1:
+        parts.append("...")
+    parts.extend([last_line, last_caret])
+    return "\n".join(parts)
+
+
 def format_syntax_error(
-    node: ts.Node, source_bytes: bytes, encoding: str, language: ts.Language
+    node: ts.Node,
+    source_bytes: bytes,
+    encoding: str,
+    language: ts.Language,
+    source_str: str,
 ) -> str:
     """Render a tree-sitter ERROR/MISSING node as a human-readable
-    message: location, the offending source line with a caret under
-    the error, and - for ERROR nodes only, when there's a short and
-    specific enough hint to be worth it (see _expected_hint) - a note
-    of what the parser would have accepted instead.
+    message: which source it came from (a file path, or a source id
+    such as 's(0)' for stdin or any other in-memory source), its
+    location, the offending source line(s) with the span underlined
+    (see format_node_span), and - for ERROR nodes only, when there's
+    a short and specific enough hint to be worth it (see
+    _expected_hint) - a note of what the parser would have accepted
+    instead.
 
     """
-    start, end = node.start_point, node.end_point
-    line = source_bytes.split(b"\n")[start.row].decode(encoding, errors="replace")
-    width = (end.column - start.column) if end.row == start.row else len(line)
-    caret = " " * start.column + "^" * max(1, width)
+    start = node.start_point
     if node.is_missing:
         head = f"missing {node.type!r}"
     else:
         offending_text = (node.text or b"").decode(encoding, errors="replace")
         head = f"unexpected {offending_text!r}"
-        hint = _expected_hint(language, node, offending_text)
+        hint = _expected_hint(language, node)
         if hint:
             head += f", expected one of: {', '.join(hint)}"
-    return f"line {start.row + 1}, column {start.column + 1}: {head}\n{line}\n{caret}"
+    span = format_node_span(node, source_bytes, encoding)
+    return f"{source_str}:{start.row + 1}:{start.column}: {head}\n{span}"

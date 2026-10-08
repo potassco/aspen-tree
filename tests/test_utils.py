@@ -15,6 +15,8 @@ from aspen.utils.tree_sitter_utils import (
     calc_node_edit_range,
     edit_tree,
     expected_symbols,
+    format_node_span,
+    format_syntax_error,
     get_node_at_path,
     get_tree_changes,
 )
@@ -399,3 +401,54 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
         missing_dot = get_node_at_path(tree, [0, 2], reverse=True)
         self.assertTrue(missing_dot.is_missing)
         self.assertListEqual(expected_symbols(clingo_lang, missing_dot), ["."])
+
+    def test_format_syntax_error_includes_source_str(self) -> None:
+        """Test that format_syntax_error's message starts with the
+        given source identifier - a file path, or a source id such as
+        's(0)' for stdin or any other in-memory source - so the
+        caller can tell which source an error came from."""
+        source = b"#show a/1"
+        parser = Parser(clingo_lang)
+        tree = parser.parse(source)
+        missing_dot = get_node_at_path(tree, [0, 2], reverse=True)
+        self.assertTrue(missing_dot.is_missing)
+        message = format_syntax_error(
+            missing_dot, source, "utf8", clingo_lang, "myfile.lp"
+        )
+        self.assertEqual(message, "myfile.lp:1:9: missing '.'\n#show a/1\n         ^")
+
+    def test_format_node_span_single_line(self) -> None:
+        """Test that a span within one line is rendered as that line
+        followed by one caret-underlined line covering its width."""
+        source = b"a(1,2)."
+        parser = Parser(clingo_lang)
+        tree = parser.parse(source)
+        self.assertEqual(
+            format_node_span(tree.root_node, source, "utf8"),
+            "a(1,2).\n^^^^^^^",
+        )
+
+    def test_format_node_span_two_lines_no_elision(self) -> None:
+        """Test that a span covering exactly two lines shows both in
+        full - first line underlined to its end, last line underlined
+        from its start - with no '...' in between, since there is no
+        line left out."""
+        source = b"p(1,\n2)."
+        parser = Parser(clingo_lang)
+        tree = parser.parse(source)
+        self.assertEqual(
+            format_node_span(tree.root_node, source, "utf8"),
+            "p(1,\n^^^^\n2).\n^^^",
+        )
+
+    def test_format_node_span_three_lines_with_elision(self) -> None:
+        """Test that a span covering three or more lines shows only
+        its first and last line, with a single '...' line standing in
+        for whatever lies between them."""
+        source = b"p(1,\n2,\n3)."
+        parser = Parser(clingo_lang)
+        tree = parser.parse(source)
+        self.assertEqual(
+            format_node_span(tree.root_node, source, "utf8"),
+            "p(1,\n^^^^\n...\n3).\n^^^",
+        )

@@ -316,10 +316,38 @@ p(1
             meta_files=[encoding_dir / "log_warning.lp"],
         )
 
+    def test_transform_logs_show_node_span(self) -> None:
+        """Test that a log message attached to a node shows that
+        node's text span underlined right after it, in the same
+        caret style as syntax errors - rather than just the bare
+        location prefix."""
+        source_path = input_dir / "a.lp"
+        loc_log_str = str(source_path).replace("\\", "\\\\")
+        loc_log_str += r":1:0-2: This is a log for node 'a\.'\.\na\.\n\^\^"
+        self.assert_transform_logs(
+            log_level="WARNING",
+            message2num_matches={loc_log_str: 1},
+            language=clingo_lang,
+            source=source_path,
+            meta_files=[encoding_dir / "log_warning.lp"],
+        )
+
     def test_transform_raises(self) -> None:
         """Test that transformation raises error as expected."""
         self.assert_transform_raises(
             message_regex=r"s\(0\):1:0-1: This is an error for node 'a'.",
+            language=clingo_lang,
+            sources=["a."],
+            meta_files=[encoding_dir / "raise_error.lp"],
+        )
+
+    def test_transform_raises_shows_node_span(self) -> None:
+        """Test that an exception attached to a node shows that
+        node's text span underlined right after it, in the same caret
+        style as syntax errors - rather than just the bare location
+        prefix."""
+        self.assert_transform_raises(
+            message_regex=r"s\(0\):1:0-1: This is an error for node 'a'\.\na\.\n\^",
             language=clingo_lang,
             sources=["a."],
             meta_files=[encoding_dir / "raise_error.lp"],
@@ -343,7 +371,7 @@ p(1
         tree = AspenTree(default_language=clingo_lang)
         with self.assertRaisesRegex(
             TransformError,
-            r"line 1, column 7: missing '\.'\na :- b\n      \^",
+            r"s\(0\):1:6: missing '\.'\na :- b\n      \^",
         ):
             tree.parse("a :- b")
 
@@ -357,7 +385,7 @@ p(1
         with self.assertRaisesRegex(
             TransformError,
             (
-                r"line 1, column 10: unexpected 'a', expected one of: \{\n"
+                r"s\(0\):1:9: unexpected 'a', expected one of: \{\n"
                 r"a :- #suma\{X : b\(X\)\} = 2\.\n"
                 r"         \^"
             ),
@@ -372,7 +400,7 @@ p(1
         tree = AspenTree(default_language=clingo_lang)
         with self.assertRaisesRegex(
             TransformError,
-            r"line 1, column 4: unexpected ','\na\(1,,2\)\.\n   \^",
+            r"s\(0\):1:3: unexpected ','\na\(1,,2\)\.\n   \^",
         ) as ctx:
             tree.parse("a(1,,2).")
         self.assertNotIn("expected one of", str(ctx.exception))
@@ -386,10 +414,10 @@ p(1
         with self.assertRaisesRegex(
             TransformError,
             (
-                r"line 1, column 10: unexpected 'a', expected one of: \{\n"
+                r"s\(0\):1:9: unexpected 'a', expected one of: \{\n"
                 r"a :- #suma\{X : b\(X\)\} = 2\.\n"
                 r"         \^\n"
-                r"line 2, column 7: missing '\.'\nc :- d\n      \^"
+                r"s\(0\):2:6: missing '\.'\nc :- d\n      \^"
             ),
         ):
             tree.parse("a :- #suma{X : b(X)} = 2.\nc :- d")
@@ -412,7 +440,7 @@ p(1
         tree.parse("a :- b")
         with self.assertRaisesRegex(
             TransformError,
-            r"line 1, column 7: missing '\.'\na :- b\n      \^",
+            r"s\(0\):1:6: missing '\.'\na :- b\n      \^",
         ):
             tree.transform(meta_files=[generic_util_path / "raise_syntax_error.lp"])
 

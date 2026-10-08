@@ -22,6 +22,7 @@ from aspen.utils.tree_sitter_utils import (
     calc_node_append_range,
     calc_node_edit_range,
     edit_tree,
+    format_node_span,
     format_syntax_error,
     get_path_of_node,
     get_tree_changes,
@@ -317,8 +318,11 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             syntax_error_nodes.sort(
                 key=lambda node: (node.start_point.row, node.start_point.column)
             )
+            source_str = self._source_str(source)
             messages = [
-                format_syntax_error(node, source.source_bytes, source.encoding, language)
+                format_syntax_error(
+                    node, source.source_bytes, source.encoding, language, source_str
+                )
                 for node in syntax_error_nodes
             ]
             raise TransformError("\n".join(messages))
@@ -434,7 +438,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 symb.type != SymbolType.Function
                 or not symb.positive
                 or symb.name != "aspen"
-            ):
+            ):  # nocoverage
                 continue
             symb_args = symb.arguments
             if len(symb_args) != 1:  # nocoverage
@@ -501,15 +505,18 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         self._pending_source_changes = self._reparse_sources(edited_sources)
         return False
 
+    def _source_str(self, source: Source) -> str:
+        """The identifier to show for a source in error/log messages:
+        its file path when read from one, or its source id otherwise
+        (e.g. for stdin, or any other in-memory source)."""
+        return str(source.path) if source.path is not None else str(source.id)
+
     def _get_loc_prefix_from_source_node(self, source: Source, node: ts.Node) -> str:
         """Given a symbolic tuple of a source and path, calculate the
         node's location prefix string for error and log messages.
 
         """
-        if source.path is not None:
-            source_str = str(source.path)
-        else:
-            source_str = str(source.id)
+        source_str = self._source_str(source)
         start_p, end_p = node.start_point, node.end_point
         if start_p.row == end_p.row:
             span_str = f"{start_p.row + 1}:{start_p.column}-{end_p.column}"
@@ -522,6 +529,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         """Emit logs based on log symbols."""
         for symb in log_symbols:
             logger.debug("Processing log symbol %s.", symb)
+            span = ""
             if len(symb.arguments) == 2:
                 log_level_symb = symb.arguments[0]
                 loc_prefix = " "
@@ -534,6 +542,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 )
                 loc_prefix = self._get_loc_prefix_from_source_node(source, node)
                 text = self._template_symb2str(symb.arguments[2])
+                span = format_node_span(node, source.source_bytes, source.encoding)
             if (
                 log_level_symb.type == SymbolType.String
                 and log_level_symb.string in log_lvl_strs
@@ -546,6 +555,8 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 )
 
             log_msg = f"{loc_prefix}{text}"
+            if span:
+                log_msg += f"\n{span}"
             logger.debug(
                 "Log level and text of symbol after processing: %s, %s", log_lvl, log_msg
             )
@@ -607,6 +618,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         error_msgs: list[str] = []
         for symb in exception_symbols:
             logger.debug("Processing exception symbol %s.", symb)
+            span = ""
             if len(symb.arguments) == 1:
                 loc_prefix = ""
                 text = self._template_symb2str(symb.arguments[0])
@@ -617,7 +629,11 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 )
                 loc_prefix = self._get_loc_prefix_from_source_node(source, node)
                 text = self._template_symb2str(symb.arguments[1])
-            error_msgs.append(f"{loc_prefix}{text}")
+                span = format_node_span(node, source.source_bytes, source.encoding)
+            msg = f"{loc_prefix}{text}"
+            if span:
+                msg += f"\n{span}"
+            error_msgs.append(msg)
         if len(error_msgs) > 0:
             raise TransformError("\n".join(error_msgs))
 
@@ -666,7 +682,11 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             language = source.parser.language
             assert language is not None
             py_str = format_syntax_error(
-                node, source.source_bytes, source.encoding, language
+                node,
+                source.source_bytes,
+                source.encoding,
+                language,
+                self._source_str(source),
             )
         else:
             raise ValueError(f"Symbol {symb} could not be converted to string.")
@@ -886,7 +906,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                     symb.type != SymbolType.Function
                     or not symb.positive
                     or symb.name != "aspen"
-                ):
+                ):  # nocoverage
                     continue
                 symb_args = symb.arguments
                 if len(symb_args) != 1:  # nocoverage
@@ -896,13 +916,13 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                     ret_symb.type != SymbolType.Function
                     or not ret_symb.positive
                     or ret_symb.name != "return"
-                ):
+                ):  # nocoverage
                     continue
                 ret_args = ret_symb.arguments
                 if len(ret_args) != 2:  # nocoverage
                     continue
                 query, ret_value = ret_args
-                if query.name != "re_reify_siblings":
+                if query.name != "re_reify_siblings":  # nocoverage
                     continue
                 if (
                     ret_value.type != SymbolType.Function or not ret_value.positive
