@@ -411,7 +411,9 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 self._re_reify_changed_subtrees(self._pending_source_changes, control)
                 self._pending_source_changes = {}
 
-    def _on_transform_model(self, model: Model) -> Literal[False]:
+    def _on_transform_model(  # pylint: disable=too-many-statements
+        self, model: Model
+    ) -> Literal[False]:
         """Model callback for transformation. Returns False as we only
         expect one model."""
         if logger.isEnabledFor(logging.DEBUG):  # nocoverage
@@ -422,9 +424,8 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         edit_symbols: list[Symbol] = []
         next_transform_symbols: list[Symbol] = []
         deps: defaultdict[Symbol, list[Symbol]] = defaultdict(list)
-        log_symbols: list[Symbol] = []
-        print_symbols: list[Symbol] = []
-        exception_symbols: list[Symbol] = []
+        error_msgs: list[str] = []
+        source_edits: dict[Symbol, bytes] = {}
 
         def _record_comes_before(symb: Symbol) -> None:
             before, after = symb.arguments
@@ -434,6 +435,80 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             path_of_node, path = symb.arguments
             node_id = path_of_node.arguments[0]
             self._node_id2source_path[Function("node", [node_id])] = path
+
+        def _emit_log(
+            symb: Symbol, log_level_symb: Symbol, loc_prefix: str, text: str
+        ) -> None:
+            if (
+                log_level_symb.type == SymbolType.String
+                and log_level_symb.string in log_lvl_strs
+            ):
+                log_lvl_str = log_level_symb.string
+                log_lvl = log_lvl_str2int[log_lvl_str]
+            else:  # nocoverage
+                raise ValueError(
+                    f"Level of log symbol {symb} must be" f" one of {log_lvl_strs}."
+                )
+            log_msg = f"{loc_prefix}{text}"
+            logger.debug(
+                "Log level and text of symbol after processing: %s, %s", log_lvl, log_msg
+            )
+            logger.log(log_lvl, log_msg)
+
+        def _process_log_no_loc(symb: Symbol) -> None:
+            logger.debug("Processing log symbol %s.", symb)
+            log_level_symb, text_symb = symb.arguments
+            _emit_log(symb, log_level_symb, " ", self._template_symb2str(text_symb))
+
+        def _process_log_with_loc(symb: Symbol) -> None:
+            logger.debug("Processing log symbol %s.", symb)
+            node_symb, log_level_symb, text_symb = symb.arguments
+            source, node = self._source_path_symb2ts(self._node_id2source_path[node_symb])
+            loc_prefix = self._get_loc_prefix_from_source_node(source, node)
+            text = self._template_symb2str(text_symb)
+            span = format_node_span(node, source.source_bytes, source.encoding)
+            _emit_log(symb, log_level_symb, loc_prefix, f"{text}\n{span}")
+
+        def _print_direct(symb: Symbol) -> None:
+            logger.info("Processing print symbol %s.", symb)
+            print(self._template_symb2str(symb.arguments[0]))
+
+        def _print_to_target(symb: Symbol) -> None:
+            logger.info("Processing print symbol %s.", symb)
+            text = self._template_symb2str(symb.arguments[0])
+            textio_symb = symb.arguments[1]
+            try:
+                source = self.sources[textio_symb]
+                encoding = source.encoding
+                print_bytes = text.encode(encoding=encoding)
+                if textio_symb not in source_edits:
+                    source_edits[textio_symb] = b""
+                source_edits[textio_symb] += print_bytes + "\n".encode(encoding)
+            except KeyError:
+                try:
+                    textio = self.textio_symbols[textio_symb]
+                    print(text, file=textio)
+                except KeyError as e:  # nocoverage
+                    msg = (
+                        f"Error processing print symbol {symb}: "
+                        f"second argument {textio_symb} does not "
+                        "correspond to any source or textio symbol "
+                        "associated with AspenTree instance."
+                    )
+                    raise KeyError(msg) from e
+
+        def _process_exception_no_loc(symb: Symbol) -> None:
+            logger.debug("Processing exception symbol %s.", symb)
+            error_msgs.append(self._template_symb2str(symb.arguments[0]))
+
+        def _process_exception_with_loc(symb: Symbol) -> None:
+            logger.debug("Processing exception symbol %s.", symb)
+            node_symb, text_symb = symb.arguments
+            source, node = self._source_path_symb2ts(self._node_id2source_path[node_symb])
+            loc_prefix = self._get_loc_prefix_from_source_node(source, node)
+            text = self._template_symb2str(text_symb)
+            span = format_node_span(node, source.source_bytes, source.encoding)
+            error_msgs.append(f"{loc_prefix}{text}\n{span}")
 
         specs = [
             SymbolSpec(
@@ -446,12 +521,12 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                         SymbolSpec("append", 2, edit_symbols.append),
                         SymbolSpec("comes_before", 2, _record_comes_before),
                         SymbolSpec("next_program", 2, next_transform_symbols.append),
-                        SymbolSpec("log", 2, log_symbols.append),
-                        SymbolSpec("log", 3, log_symbols.append),
-                        SymbolSpec("print", 1, print_symbols.append),
-                        SymbolSpec("print", 2, print_symbols.append),
-                        SymbolSpec("exception", 1, exception_symbols.append),
-                        SymbolSpec("exception", 2, exception_symbols.append),
+                        SymbolSpec("log", 2, _process_log_no_loc),
+                        SymbolSpec("log", 3, _process_log_with_loc),
+                        SymbolSpec("print", 1, _print_direct),
+                        SymbolSpec("print", 2, _print_to_target),
+                        SymbolSpec("exception", 1, _process_exception_no_loc),
+                        SymbolSpec("exception", 2, _process_exception_with_loc),
                         SymbolSpec(
                             "return",
                             2,
@@ -489,9 +564,31 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 [str(s) for s in prog_params],
             )
             self.next_transform_program = (prog_name, prog_params)
-        self._process_log_symbs(log_symbols)
-        edited_sources = self._process_print_symbs(print_symbols)
-        self._process_exception_symbs(exception_symbols)
+
+        for source_symb, bytes_to_add in source_edits.items():
+            source = self.sources[source_symb]
+            root = source.tree.root_node
+            end_byte, end_point = root.end_byte, root.end_point
+            edit_range = calc_edit_range(
+                start_byte=end_byte,
+                old_end_byte=end_byte,
+                start_point=end_point,
+                old_end_point=end_point,
+                replacement=bytes_to_add,
+            )
+            logger.info("Source before printing to it: %s", source.source_bytes)
+            source.source_bytes = edit_tree(
+                source.tree,
+                edit_range,
+                bytes_to_add,
+                source.source_bytes,
+            )
+            logger.info("Source after printing to it: %s", source.source_bytes)
+        edited_sources = set(source_edits.keys())
+
+        if len(error_msgs) > 0:
+            raise TransformError("\n".join(error_msgs))
+
         sorted_edit_symbols = self._topological_sort_edits(edit_symbols, deps)
         edited_sources.update(self._edit_sources_from_symbs(sorted_edit_symbols))
         self._pending_source_changes = self._reparse_sources(edited_sources)
@@ -516,137 +613,6 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             span_str = f"{start_p.row + 1}:{start_p.column}-{end_p.row}:{end_p.column}"
         loc_prefix = f"{source_str}:{span_str}: "
         return loc_prefix
-
-    def _process_log_symbs(self, log_symbols: list[Symbol]) -> None:
-        """Emit logs based on log symbols."""
-
-        def _emit(
-            symb: Symbol, log_level_symb: Symbol, loc_prefix: str, text: str
-        ) -> None:
-            if (
-                log_level_symb.type == SymbolType.String
-                and log_level_symb.string in log_lvl_strs
-            ):
-                log_lvl_str = log_level_symb.string
-                log_lvl = log_lvl_str2int[log_lvl_str]
-            else:  # nocoverage
-                raise ValueError(
-                    f"Level of log symbol {symb} must be" f" one of {log_lvl_strs}."
-                )
-            log_msg = f"{loc_prefix}{text}"
-            logger.debug(
-                "Log level and text of symbol after processing: %s, %s", log_lvl, log_msg
-            )
-            logger.log(log_lvl, log_msg)
-
-        def _process_log_no_loc(symb: Symbol) -> None:
-            logger.debug("Processing log symbol %s.", symb)
-            log_level_symb, text_symb = symb.arguments
-            _emit(symb, log_level_symb, " ", self._template_symb2str(text_symb))
-
-        def _process_log_with_loc(symb: Symbol) -> None:
-            logger.debug("Processing log symbol %s.", symb)
-            node_symb, log_level_symb, text_symb = symb.arguments
-            source, node = self._source_path_symb2ts(self._node_id2source_path[node_symb])
-            loc_prefix = self._get_loc_prefix_from_source_node(source, node)
-            text = self._template_symb2str(text_symb)
-            span = format_node_span(node, source.source_bytes, source.encoding)
-            _emit(symb, log_level_symb, loc_prefix, f"{text}\n{span}")
-
-        dispatch_symbols(
-            log_symbols,
-            [
-                SymbolSpec("log", 2, _process_log_no_loc),
-                SymbolSpec("log", 3, _process_log_with_loc),
-            ],
-        )
-
-    def _process_print_symbs(self, print_symbols: list[Symbol]) -> set[Symbol]:
-        """Print based on print symbols."""
-        source_edits: dict[Symbol, bytes] = {}
-
-        def _print_direct(symb: Symbol) -> None:
-            logger.info("Processing print symbol %s.", symb)
-            print(self._template_symb2str(symb.arguments[0]))
-
-        def _print_to_target(symb: Symbol) -> None:
-            logger.info("Processing print symbol %s.", symb)
-            text = self._template_symb2str(symb.arguments[0])
-            textio_symb = symb.arguments[1]
-            try:
-                source = self.sources[textio_symb]
-                encoding = source.encoding
-                print_bytes = text.encode(encoding=encoding)
-                if textio_symb not in source_edits:
-                    source_edits[textio_symb] = b""
-                source_edits[textio_symb] += print_bytes + "\n".encode(encoding)
-            except KeyError:
-                try:
-                    textio = self.textio_symbols[textio_symb]
-                    print(text, file=textio)
-                except KeyError as e:  # nocoverage
-                    msg = (
-                        f"Error processing print symbol {symb}: "
-                        f"second argument {textio_symb} does not "
-                        "correspond to any source or textio symbol "
-                        "associated with AspenTree instance."
-                    )
-                    raise KeyError(msg) from e
-
-        dispatch_symbols(
-            print_symbols,
-            [
-                SymbolSpec("print", 1, _print_direct),
-                SymbolSpec("print", 2, _print_to_target),
-            ],
-        )
-        for source_symb, bytes_to_add in source_edits.items():
-            source = self.sources[source_symb]
-            root = source.tree.root_node
-            end_byte, end_point = root.end_byte, root.end_point
-            edit_range = calc_edit_range(
-                start_byte=end_byte,
-                old_end_byte=end_byte,
-                start_point=end_point,
-                old_end_point=end_point,
-                replacement=bytes_to_add,
-            )
-            logger.info("Source before printing to it: %s", source.source_bytes)
-            source.source_bytes = edit_tree(
-                source.tree,
-                edit_range,
-                bytes_to_add,
-                source.source_bytes,
-            )
-            logger.info("Source after printing to it: %s", source.source_bytes)
-        return set(source_edits.keys())
-
-    def _process_exception_symbs(self, exception_symbols: list[Symbol]) -> None:
-        """Raise errors based on exception symbols."""
-        error_msgs: list[str] = []
-
-        def _process_exception_no_loc(symb: Symbol) -> None:
-            logger.debug("Processing exception symbol %s.", symb)
-            error_msgs.append(self._template_symb2str(symb.arguments[0]))
-
-        def _process_exception_with_loc(symb: Symbol) -> None:
-            logger.debug("Processing exception symbol %s.", symb)
-            node_symb, text_symb = symb.arguments
-            source, node = self._source_path_symb2ts(self._node_id2source_path[node_symb])
-            loc_prefix = self._get_loc_prefix_from_source_node(source, node)
-            text = self._template_symb2str(text_symb)
-            span = format_node_span(node, source.source_bytes, source.encoding)
-            error_msgs.append(f"{loc_prefix}{text}\n{span}")
-
-        dispatch_symbols(
-            exception_symbols,
-            [
-                SymbolSpec("exception", 1, _process_exception_no_loc),
-                SymbolSpec("exception", 2, _process_exception_with_loc),
-            ],
-        )
-        if len(error_msgs) > 0:
-            raise TransformError("\n".join(error_msgs))
 
     def _template_symb2str(self, symb: Symbol) -> str:
         """Convert template symbol to python str."""
