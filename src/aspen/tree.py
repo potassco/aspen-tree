@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from io import TextIOBase
 from pathlib import Path
-from typing import Generator, List, Literal, Optional, Sequence
+from typing import Callable, Generator, List, Literal, Optional, Sequence
 
 import tree_sitter as ts
 from clingo.control import Control
@@ -425,7 +425,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         next_transform_symbols: list[Symbol] = []
         deps: defaultdict[Symbol, list[Symbol]] = defaultdict(list)
         error_msgs: list[str] = []
-        source_edits: dict[Symbol, bytes] = {}
+        edited_sources: set[Symbol] = set()
 
         def _record_comes_before(symb: Symbol) -> None:
             before, after = symb.arguments
@@ -480,10 +480,25 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             try:
                 source = self.sources[textio_symb]
                 encoding = source.encoding
-                print_bytes = text.encode(encoding=encoding)
-                if textio_symb not in source_edits:
-                    source_edits[textio_symb] = b""
-                source_edits[textio_symb] += print_bytes + "\n".encode(encoding)
+                bytes_to_add = text.encode(encoding=encoding) + "\n".encode(encoding)
+                root = source.tree.root_node
+                end_byte, end_point = root.end_byte, root.end_point
+                edit_range = calc_edit_range(
+                    start_byte=end_byte,
+                    old_end_byte=end_byte,
+                    start_point=end_point,
+                    old_end_point=end_point,
+                    replacement=bytes_to_add,
+                )
+                logger.info("Source before printing to it: %s", source.source_bytes)
+                source.source_bytes = edit_tree(
+                    source.tree,
+                    edit_range,
+                    bytes_to_add,
+                    source.source_bytes,
+                )
+                logger.info("Source after printing to it: %s", source.source_bytes)
+                edited_sources.add(textio_symb)
             except KeyError:
                 try:
                     textio = self.textio_symbols[textio_symb]
@@ -564,27 +579,6 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 [str(s) for s in prog_params],
             )
             self.next_transform_program = (prog_name, prog_params)
-
-        for source_symb, bytes_to_add in source_edits.items():
-            source = self.sources[source_symb]
-            root = source.tree.root_node
-            end_byte, end_point = root.end_byte, root.end_point
-            edit_range = calc_edit_range(
-                start_byte=end_byte,
-                old_end_byte=end_byte,
-                start_point=end_point,
-                old_end_point=end_point,
-                replacement=bytes_to_add,
-            )
-            logger.info("Source before printing to it: %s", source.source_bytes)
-            source.source_bytes = edit_tree(
-                source.tree,
-                edit_range,
-                bytes_to_add,
-                source.source_bytes,
-            )
-            logger.info("Source after printing to it: %s", source.source_bytes)
-        edited_sources = set(source_edits.keys())
 
         if len(error_msgs) > 0:
             raise TransformError("\n".join(error_msgs))
@@ -817,7 +811,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         return source_changes
 
     def _log_change(self, change: Change) -> None:  # nocoverage
-        """Log change."""
+        """Log change that was detected in parse tree after re-parsing via tree-sitter."""
         old_range: tuple[Optional[ts.Point], Optional[ts.Point]]
         new_range: tuple[Optional[ts.Point], Optional[ts.Point]]
         old_siblings, new_siblings = change
@@ -849,7 +843,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             new_range[1],
         )
 
-    def _re_reify_changed_subtrees(  # pylint: disable=too-many-statements
+    def _re_reify_changed_subtrees(
         self,
         source_changes: dict[Symbol, list[Change]],
         control: Control,
@@ -902,48 +896,50 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                     ("Found stable model with shown atoms: %s"),
                     " ".join([str(s) + "." for s in model.symbols(shown=True)]),
                 )
-            related_sib_names = {
-                "parent",
-                "prev_sibling",
-                "next_sibling",
-            }
-            for symb in model.symbols(terms=True):
-                # See the equivalent comment in _on_transform_model:
-                # cache .type/.positive/.name/.arguments per symbol
-                # instead of re-deriving them via repeated .match()
-                # calls on the same symbol.
-                if (
-                    symb.type != SymbolType.Function
-                    or not symb.positive
-                    or symb.name != "aspen"
-                ):  # nocoverage
-                    continue
-                symb_args = symb.arguments
-                if len(symb_args) != 1:  # nocoverage
-                    continue
-                ret_symb = symb_args[0]
-                if (
-                    ret_symb.type != SymbolType.Function
-                    or not ret_symb.positive
-                    or ret_symb.name != "return"
-                ):  # nocoverage
-                    continue
-                ret_args = ret_symb.arguments
-                if len(ret_args) != 2:  # nocoverage
-                    continue
-                query, ret_value = ret_args
-                if query.name != "re_reify_siblings":  # nocoverage
-                    continue
-                if (
-                    ret_value.type != SymbolType.Function or not ret_value.positive
-                ):  # nocoverage
-                    continue
-                rv_name = ret_value.name
-                rv_args = ret_value.arguments
-                if rv_name == "delete" and len(rv_args) == 1:
-                    delete_facts.add(rv_args[0])
-                elif len(rv_args) == 1 and rv_name in related_sib_names:
-                    query2_related_dict[query][rv_name] = rv_args[0]
+
+            def _process_return(symb: Symbol) -> None:
+                query, ret_value = symb.arguments
+
+                def _record_related(rel_name: str) -> Callable[[Symbol], None]:
+                    def _record(rv: Symbol) -> None:
+                        query2_related_dict[query][rel_name] = rv.arguments[0]
+
+                    return _record
+
+                dispatch_symbols(
+                    [ret_value],
+                    [
+                        SymbolSpec(
+                            "delete", 1, lambda rv: delete_facts.add(rv.arguments[0])
+                        ),
+                        SymbolSpec("parent", 1, _record_related("parent")),
+                        SymbolSpec("prev_sibling", 1, _record_related("prev_sibling")),
+                        SymbolSpec("next_sibling", 1, _record_related("next_sibling")),
+                    ],
+                )
+
+            dispatch_symbols(
+                model.symbols(terms=True),
+                [
+                    SymbolSpec(
+                        "aspen",
+                        1,
+                        Descend(
+                            0,
+                            [
+                                SymbolSpec(
+                                    "return",
+                                    2,
+                                    _process_return,
+                                    guard=lambda symb: (
+                                        symb.arguments[0].name == "re_reify_siblings"
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                ],
+            )
             return False
 
         control.assign_external(Function("re_reify", []), True)
