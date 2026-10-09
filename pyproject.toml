@@ -57,6 +57,7 @@ line-length = 90
 
 [tool.pylint.format]
 max-line-length = 90
+max-module-lines = 1100
 
 [tool.pylint.design]
 max-args = 10
