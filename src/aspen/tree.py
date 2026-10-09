@@ -16,7 +16,7 @@ from clingo.symbol import Function, Number, String, Symbol, SymbolType, Tuple_
 
 import aspen
 from aspen.utils.log import get_clingo_logger, get_logger, get_ts_logger
-from aspen.utils.symbol_dispatch import Descend, SymbolSpec, dispatch_symbols
+from aspen.utils.symbol_dispatch import AllOf, AnyOf, At, Is, dispatch_symbols
 from aspen.utils.tree_sitter_utils import (
     Change,
     calc_edit_range,
@@ -525,34 +525,34 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             span = format_node_span(node, source.source_bytes, source.encoding)
             error_msgs.append(f"{loc_prefix}{text}\n{span}")
 
-        specs = [
-            SymbolSpec(
-                "aspen",
-                1,
-                Descend(
-                    0,
+        spec = Is(
+            "aspen",
+            1,
+            shape=At(
+                0,
+                AnyOf(
                     [
-                        SymbolSpec("replace", 2, edit_symbols.append),
-                        SymbolSpec("append", 2, edit_symbols.append),
-                        SymbolSpec("comes_before", 2, _record_comes_before),
-                        SymbolSpec("next_program", 2, next_transform_symbols.append),
-                        SymbolSpec("log", 2, _process_log_no_loc),
-                        SymbolSpec("log", 3, _process_log_with_loc),
-                        SymbolSpec("print", 1, _print_direct),
-                        SymbolSpec("print", 2, _print_to_target),
-                        SymbolSpec("exception", 1, _process_exception_no_loc),
-                        SymbolSpec("exception", 2, _process_exception_with_loc),
-                        SymbolSpec(
+                        Is("replace", 2, edit_symbols.append),
+                        Is("append", 2, edit_symbols.append),
+                        Is("comes_before", 2, _record_comes_before),
+                        Is("next_program", 2, next_transform_symbols.append),
+                        Is("log", 2, _process_log_no_loc),
+                        Is("log", 3, _process_log_with_loc),
+                        Is("print", 1, _print_direct),
+                        Is("print", 2, _print_to_target),
+                        Is("exception", 1, _process_exception_no_loc),
+                        Is("exception", 2, _process_exception_with_loc),
+                        Is(
                             "return",
                             2,
                             _record_path_of_node,
-                            guard=lambda symb: symb.arguments[0].match("path_of_node", 1),
+                            shape=At(0, Is(name="path_of_node", arity=1)),
                         ),
-                    ],
+                    ]
                 ),
             ),
-        ]
-        dispatch_symbols(model.symbols(terms=True), specs)
+        )
+        dispatch_symbols(model.symbols(terms=True), spec)
         if len(next_transform_symbols) > 1:
             raise ValueError(
                 (
@@ -661,36 +661,44 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
 
         dispatch_symbols(
             [symb],
-            [
-                SymbolSpec("node", 1, _node),
-                SymbolSpec(
-                    "format",
-                    2,
-                    _format,
-                    guard=lambda symb: (
-                        symb.arguments[0].type == SymbolType.String
-                        and symb.arguments[1].match("", 2)
+            AnyOf(
+                [
+                    Is("node", 1, _node),
+                    Is(
+                        "format",
+                        2,
+                        _format,
+                        shape=AllOf(
+                            [
+                                At(0, Is(type=SymbolType.String)),
+                                At(1, Is(name="", arity=2)),
+                            ]
+                        ),
                     ),
-                ),
-                SymbolSpec(
-                    "join",
-                    2,
-                    _join,
-                    guard=lambda symb: (
-                        symb.arguments[0].type == SymbolType.String
-                        and (
-                            symb.arguments[1].match("", 2)
-                            or symb.arguments[1].match("", 0)
-                        )
+                    Is(
+                        "join",
+                        2,
+                        _join,
+                        shape=AllOf(
+                            [
+                                At(0, Is(type=SymbolType.String)),
+                                AnyOf(
+                                    [
+                                        At(1, Is(name="", arity=2)),
+                                        At(1, Is(name="", arity=0)),
+                                    ]
+                                ),
+                            ]
+                        ),
                     ),
-                ),
-                SymbolSpec(
-                    "syntax_error",
-                    1,
-                    _syntax_error,
-                    guard=lambda symb: symb.arguments[0].match("node", 1),
-                ),
-            ],
+                    Is(
+                        "syntax_error",
+                        1,
+                        _syntax_error,
+                        shape=At(0, Is(name="node", arity=1)),
+                    ),
+                ]
+            ),
         )
         if not result:
             raise ValueError(f"Symbol {symb} could not be converted to string.")
@@ -908,37 +916,31 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
 
                 dispatch_symbols(
                     [ret_value],
-                    [
-                        SymbolSpec(
-                            "delete", 1, lambda rv: delete_facts.add(rv.arguments[0])
-                        ),
-                        SymbolSpec("parent", 1, _record_related("parent")),
-                        SymbolSpec("prev_sibling", 1, _record_related("prev_sibling")),
-                        SymbolSpec("next_sibling", 1, _record_related("next_sibling")),
-                    ],
+                    AnyOf(
+                        [
+                            Is("delete", 1, lambda rv: delete_facts.add(rv.arguments[0])),
+                            Is("parent", 1, _record_related("parent")),
+                            Is("prev_sibling", 1, _record_related("prev_sibling")),
+                            Is("next_sibling", 1, _record_related("next_sibling")),
+                        ]
+                    ),
                 )
 
             dispatch_symbols(
                 model.symbols(terms=True),
-                [
-                    SymbolSpec(
-                        "aspen",
-                        1,
-                        Descend(
-                            0,
-                            [
-                                SymbolSpec(
-                                    "return",
-                                    2,
-                                    _process_return,
-                                    guard=lambda symb: (
-                                        symb.arguments[0].name == "re_reify_siblings"
-                                    ),
-                                ),
-                            ],
+                Is(
+                    "aspen",
+                    1,
+                    shape=At(
+                        0,
+                        Is(
+                            "return",
+                            2,
+                            _process_return,
+                            shape=At(0, Is(name="re_reify_siblings")),
                         ),
                     ),
-                ],
+                ),
             )
             return False
 
