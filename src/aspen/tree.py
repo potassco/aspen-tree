@@ -22,6 +22,7 @@ from aspen.utils.tree_sitter_utils import (
     calc_edit_range,
     calc_node_append_range,
     calc_node_edit_range,
+    calc_node_prepend_range,
     edit_tree,
     format_node_span,
     format_syntax_error,
@@ -534,6 +535,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                     [
                         Func("replace", 2, action=edit_symbols.append),
                         Func("append", 2, action=edit_symbols.append),
+                        Func("prepend", 2, action=edit_symbols.append),
                         Func("comes_before", 2, action=_record_comes_before),
                         Func("next_program", 2, action=next_transform_symbols.append),
                         Func("log", 2, action=_process_log_no_loc),
@@ -764,11 +766,12 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                         target_source.source_bytes, encoding=target_source.encoding
                     ).replace("\n", "\\n"),
                 )
-            # TODO: Implement prepend operator as well
             if symb.match("replace", 2):
                 edit_range = calc_node_edit_range(target_node, insert_bytes)
             elif symb.match("append", 2):
                 edit_range = calc_node_append_range(target_node, insert_bytes)
+            elif symb.match("prepend", 2):
+                edit_range = calc_node_prepend_range(target_node, insert_bytes)
             else:  # nocoverage
                 raise RuntimeError("Code should be unreachable.")
             target_source.source_bytes = edit_tree(

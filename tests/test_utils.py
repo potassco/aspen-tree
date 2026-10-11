@@ -13,6 +13,7 @@ from aspen.utils.tree_sitter_utils import (
     EditRange,
     calc_node_append_range,
     calc_node_edit_range,
+    calc_node_prepend_range,
     edit_tree,
     expected_symbols,
     format_node_span,
@@ -98,6 +99,8 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
                     replace_range = calc_node_edit_range(target_node, replace_bytes)
                 elif mode == "append":
                     replace_range = calc_node_append_range(target_node, replace_bytes)
+                elif mode == "prepend":
+                    replace_range = calc_node_prepend_range(target_node, replace_bytes)
                 else:
                     raise ValueError
                 current_bytes = edit_tree(
@@ -254,6 +257,42 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
             input_bytes=b"a(1). z :- x",
             edits=[([0, 0, 0, 2], "append", b",2")],
             expected_final_bytes=b"a(1,2). z :- x",
+            expected_change_descriptors=[(([0], 2), ([0], 2))],
+        )
+
+    def test_changes_node_prepend1(self) -> None:
+        """Test that prepending before node results in expected changes."""
+        self.assert_edits_changes_equal(
+            input_bytes=b"a :- b. z :- x.",
+            edits=[([0], "prepend", b"asd :- wasd. dsa :- asd. ")],
+            expected_final_bytes=b"asd :- wasd. dsa :- asd. a :- b. z :- x.",
+            expected_change_descriptors=[(([0], 1), ([0], 3))],
+        )
+
+    def test_changes_node_prepend2(self) -> None:
+        """Test that prepending before node results in expected changes."""
+        self.assert_edits_changes_equal(
+            input_bytes=b"a(1). z :- x",
+            edits=[([0, 0, 0, 2], "prepend", b"9")],
+            expected_final_bytes=b"a(91). z :- x",
+            expected_change_descriptors=[(([0], 2), ([0], 2))],
+        )
+
+    def test_changes_node_prepend3(self) -> None:
+        """Test that prepending before node results in expected changes."""
+        self.assert_edits_changes_equal(
+            input_bytes=b"a(1). z :- x",
+            edits=[([0, 0, 0], "prepend", b"b. p ")],
+            expected_final_bytes=b"b. p a(1). z :- x",
+            expected_change_descriptors=[(([0], 2), ([0], 4))],
+        )
+
+    def test_changes_node_prepend4(self) -> None:
+        """Test that prepending before node results in expected changes."""
+        self.assert_edits_changes_equal(
+            input_bytes=b"a(1). z :- x",
+            edits=[([0, 0, 0, 2], "prepend", b"2,")],
+            expected_final_bytes=b"a(2,1). z :- x",
             expected_change_descriptors=[(([0], 2), ([0], 2))],
         )
 

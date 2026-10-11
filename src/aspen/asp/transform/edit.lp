@@ -28,10 +28,10 @@ aspen(item_in_template(Template, First)) :-
   aspen(list_in_template(Template, (First, Rest))).
 
 aspen(item_in_template(Template, Template)) :-
-  aspen(replace(Node, Template);append(Node, Template)).
+  aspen(replace(Node, Template);append(Node, Template);prepend(Node, Template)).
 
 aspen(query(descendant(N))) :-
-  aspen(replace(_,S);append(_,S)), aspen(node_in_template(S,node(N))).
+  aspen(replace(_,S);append(_,S);prepend(_,S)), aspen(node_in_template(S,node(N))).
 
 aspen(target(replace(N,S),N)) :- aspen(replace(N,S)).
 
@@ -39,7 +39,7 @@ aspen(target(replace(N,S),N)) :- aspen(replace(N,S)).
 % for the text replacement to be correct.
 aspen(comes_before(replace(node(TargetNode), S'), Edit)) :-
   aspen(Edit),
-  Edit = (replace(N, S);append(N, S)),
+  Edit = (replace(N, S);append(N, S);prepend(N, S)),
   aspen(node_in_template(S, node(InsertNode))),
   aspen(replace(node(TargetNode), S')),
   Edit != replace(node(TargetNode), S'),
@@ -52,7 +52,7 @@ aspen(comes_before(replace(node(TargetNode), S'), Edit)) :-
 % targets
 aspen(query(path_of_node(N))) :-
   aspen(log(node(N), _, _);exception(node(N), _);
-        replace(node(N), _);append(node(N), _)).
+        replace(node(N), _);append(node(N), _);prepend(node(N), _)).
 
 % template inserts
 aspen(item_in_template(Template, Template)) :-

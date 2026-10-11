@@ -5,6 +5,7 @@
   not re_reify,
   X=(replace(N,T);
      append(N,T);
+     prepend(N,T);
      comes_before(E1,E2);
      next_program(P,C);
      log(L,T);

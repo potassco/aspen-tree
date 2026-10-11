@@ -127,25 +127,36 @@ def calc_edit_range(
     return edit_range
 
 
-def calc_node_edit_range(edit_node: ts.Node, replacement: bytes) -> EditRange:
+def calc_node_edit_range(node: ts.Node, replacement: bytes) -> EditRange:
     """Calculate start/end bytes and points for a node edit."""
-    start_byte = edit_node.start_byte
-    old_end_byte = edit_node.end_byte
-    start_point = edit_node.start_point
-    old_end_point = edit_node.end_point
+    start_byte = node.start_byte
+    old_end_byte = node.end_byte
+    start_point = node.start_point
+    old_end_point = node.end_point
     return calc_edit_range(
         start_byte, old_end_byte, start_point, old_end_point, replacement
     )
 
 
-def calc_node_append_range(append_node: ts.Node, to_append: bytes) -> EditRange:
+def calc_node_append_range(node: ts.Node, to_append: bytes) -> EditRange:
     """Calculate start/end bytes and points for appending text after node."""
-    start_byte = append_node.end_byte
-    old_end_byte = append_node.end_byte
-    start_point = append_node.end_point
-    old_end_point = append_node.end_point
+    start_byte = node.end_byte
+    old_end_byte = node.end_byte
+    start_point = node.end_point
+    old_end_point = node.end_point
     return calc_edit_range(
         start_byte, old_end_byte, start_point, old_end_point, to_append
+    )
+
+
+def calc_node_prepend_range(node: ts.Node, to_prepend: bytes) -> EditRange:
+    """Calculate start/end bytes and points for prepending text before node."""
+    start_byte = node.start_byte
+    old_end_byte = node.start_byte
+    start_point = node.start_point
+    old_end_point = node.start_point
+    return calc_edit_range(
+        start_byte, old_end_byte, start_point, old_end_point, to_prepend
     )
 
 

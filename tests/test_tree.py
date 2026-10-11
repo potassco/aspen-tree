@@ -190,6 +190,16 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             expected_sources=["b."],
         )
 
+    def test_transform_prepend(self) -> None:
+        """Test that transformation succeeds when prepending text before
+        a node."""
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["a."],
+            meta_string='aspen(prepend(node(N), "x :- y. ")) :- leaf_text(N, "a").',
+            expected_sources=["x :- y. a."],
+        )
+
     def test_transform_bad_replace(self) -> None:
         """Test that tranformation raises error when invalid
         replacement is used in aspen(replace(S,R))."""
