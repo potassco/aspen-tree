@@ -16,7 +16,7 @@ from clingo.symbol import Function, Number, String, Symbol, SymbolType, Tuple_
 
 import aspen
 from aspen.utils.log import get_clingo_logger, get_logger, get_ts_logger
-from aspen.utils.symbol_dispatch import AllOf, AnyOf, At, Is, dispatch_symbols
+from aspen.utils.symbol_dispatch import AllOf, AnyOf, At, Func, Str, Tup, dispatch_symbols
 from aspen.utils.tree_sitter_utils import (
     Change,
     calc_edit_range,
@@ -525,28 +525,28 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             span = format_node_span(node, source.source_bytes, source.encoding)
             error_msgs.append(f"{loc_prefix}{text}\n{span}")
 
-        spec = Is(
+        spec = Func(
             "aspen",
             1,
             shape=At(
                 0,
                 AnyOf(
                     [
-                        Is("replace", 2, edit_symbols.append),
-                        Is("append", 2, edit_symbols.append),
-                        Is("comes_before", 2, _record_comes_before),
-                        Is("next_program", 2, next_transform_symbols.append),
-                        Is("log", 2, _process_log_no_loc),
-                        Is("log", 3, _process_log_with_loc),
-                        Is("print", 1, _print_direct),
-                        Is("print", 2, _print_to_target),
-                        Is("exception", 1, _process_exception_no_loc),
-                        Is("exception", 2, _process_exception_with_loc),
-                        Is(
+                        Func("replace", 2, action=edit_symbols.append),
+                        Func("append", 2, action=edit_symbols.append),
+                        Func("comes_before", 2, action=_record_comes_before),
+                        Func("next_program", 2, action=next_transform_symbols.append),
+                        Func("log", 2, action=_process_log_no_loc),
+                        Func("log", 3, action=_process_log_with_loc),
+                        Func("print", 1, action=_print_direct),
+                        Func("print", 2, action=_print_to_target),
+                        Func("exception", 1, action=_process_exception_no_loc),
+                        Func("exception", 2, action=_process_exception_with_loc),
+                        Func(
                             "return",
                             2,
-                            _record_path_of_node,
-                            shape=At(0, Is(name="path_of_node", arity=1)),
+                            action=_record_path_of_node,
+                            shape=At(0, Func(name="path_of_node", arity=1)),
                         ),
                     ]
                 ),
@@ -663,39 +663,29 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             [symb],
             AnyOf(
                 [
-                    Is("node", 1, _node),
-                    Is(
+                    Func("node", 1, action=_node),
+                    Func(
                         "format",
                         2,
-                        _format,
-                        shape=AllOf(
-                            [
-                                At(0, Is(type=SymbolType.String)),
-                                At(1, Is(name="", arity=2)),
-                            ]
-                        ),
+                        action=_format,
+                        shape=AllOf([At(0, Str()), At(1, Tup(2))]),
                     ),
-                    Is(
+                    Func(
                         "join",
                         2,
-                        _join,
+                        action=_join,
                         shape=AllOf(
                             [
-                                At(0, Is(type=SymbolType.String)),
-                                AnyOf(
-                                    [
-                                        At(1, Is(name="", arity=2)),
-                                        At(1, Is(name="", arity=0)),
-                                    ]
-                                ),
+                                At(0, Str()),
+                                AnyOf([At(1, Tup(2)), At(1, Tup(0))]),
                             ]
                         ),
                     ),
-                    Is(
+                    Func(
                         "syntax_error",
                         1,
-                        _syntax_error,
-                        shape=At(0, Is(name="node", arity=1)),
+                        action=_syntax_error,
+                        shape=At(0, Func(name="node", arity=1)),
                     ),
                 ]
             ),
@@ -918,26 +908,34 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                     [ret_value],
                     AnyOf(
                         [
-                            Is("delete", 1, lambda rv: delete_facts.add(rv.arguments[0])),
-                            Is("parent", 1, _record_related("parent")),
-                            Is("prev_sibling", 1, _record_related("prev_sibling")),
-                            Is("next_sibling", 1, _record_related("next_sibling")),
+                            Func(
+                                "delete",
+                                1,
+                                action=lambda rv: delete_facts.add(rv.arguments[0]),
+                            ),
+                            Func("parent", 1, action=_record_related("parent")),
+                            Func(
+                                "prev_sibling", 1, action=_record_related("prev_sibling")
+                            ),
+                            Func(
+                                "next_sibling", 1, action=_record_related("next_sibling")
+                            ),
                         ]
                     ),
                 )
 
             dispatch_symbols(
                 model.symbols(terms=True),
-                Is(
+                Func(
                     "aspen",
                     1,
                     shape=At(
                         0,
-                        Is(
+                        Func(
                             "return",
                             2,
-                            _process_return,
-                            shape=At(0, Is(name="re_reify_siblings")),
+                            action=_process_return,
+                            shape=At(0, Func(name="re_reify_siblings")),
                         ),
                     ),
                 ),
