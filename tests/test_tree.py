@@ -454,6 +454,46 @@ p(1
         ):
             tree.transform(meta_files=[generic_util_path / "raise_syntax_error.lp"])
 
+    def test_transform_meta_encoding_aspen_include(self) -> None:
+        """Test that a user-authored meta-encoding can #include
+        "@aspen/..." to reach aspen's own bundled ASP utility library,
+        without needing to know where aspen itself is installed."""
+        tree = AspenTree(default_language=clingo_lang)
+        tree.parse("a(1,2).")
+        meta_str = (
+            '#include "@aspen/clingo/derived_predicates/named_child_index.lp".\n'
+            '#include "@aspen/clingo/derived_predicates/symbol_signature.lp".\n'
+            'aspen(print(format("{0}", (Name, ())))) :- '
+            "symbol_signature(N, (Name, Arity))."
+        )
+        with redirect_stdout(StringIO()) as buf:
+            tree.transform(meta_string=meta_str)
+            self.assertEqual(buf.getvalue(), "a\n")
+
+    def test_transform_meta_encoding_file_with_aspen_include(self) -> None:
+        """Test that the '@aspen/' convention also works from a
+        meta-encoding file on disk (meta_files), including when it is
+        itself #include-d (via a normal local, relative path) from a
+        second user-authored file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            helpers_path = tmp_path / "helpers.lp"
+            helpers_path.write_text(
+                '#include "@aspen/clingo/derived_predicates/named_child_index.lp".\n'
+                '#include "@aspen/clingo/derived_predicates/symbol_signature.lp".\n'
+            )
+            main_path = tmp_path / "main.lp"
+            main_path.write_text(
+                '#include "./helpers.lp".\n'
+                'aspen(print(format("{0}", (Name, ())))) :- '
+                "symbol_signature(N, (Name, Arity))."
+            )
+            tree = AspenTree(default_language=clingo_lang)
+            tree.parse("a(1,2).")
+            with redirect_stdout(StringIO()) as buf:
+                tree.transform(meta_files=[main_path])
+                self.assertEqual(buf.getvalue(), "a\n")
+
     def test_transform_print(self) -> None:
         """Test that aspen(print(String)) symbols derived during
         transformation prints String to stdout."""

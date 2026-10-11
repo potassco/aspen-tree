@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from io import TextIOBase
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Callable, Generator, List, Literal, Optional, Sequence
 
 import tree_sitter as ts
@@ -15,6 +16,7 @@ from clingo.solving import Model
 from clingo.symbol import Function, Number, String, Symbol, SymbolType, Tuple_
 
 import aspen
+from aspen.utils.include_resolver import resolve_meta_encoding_file, rewrite_includes
 from aspen.utils.log import get_clingo_logger, get_logger, get_ts_logger
 from aspen.utils.symbol_dispatch import AllOf, AnyOf, At, Func, Str, Tup, dispatch_symbols
 from aspen.utils.tree_sitter_utils import (
@@ -57,7 +59,8 @@ base_program = ("base", ())
 
 aspen_init_path = Path(aspen.__file__)
 encoding_path = (aspen_init_path / ".." / "asp").resolve()
-generic_util_path = encoding_path / "utils" / "generic"
+bundled_utils_path = encoding_path / "utils"
+generic_util_path = bundled_utils_path / "generic"
 
 
 class TransformError(Exception):
@@ -374,43 +377,54 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             for f in meta_files:
                 if not f.is_file():
                     raise IOError(f"File {f} not found.")
-        encoding_files = [str(f) for f in meta_files] if meta_files is not None else []
-
         base_encodings = [encoding_path / "transform" / "all.lp"]
-        encoding_files.extend([str(p) for p in base_encodings])
         self.next_transform_program = initial_program
         parts: Sequence[tuple[str, Sequence[Symbol]]]
-        while self.next_transform_program is not None:
-            logger.debug("Initializing clingo.Control with options %s.", options)
-            control = Control(arguments=options, logger=clingo_logger)
-            parts = (
-                [base_program]
-                if self.next_transform_program == base_program
-                else [base_program, self.next_transform_program]
+        with TemporaryDirectory() as cache_dir:
+            cache_root = Path(cache_dir)
+            resolved_meta_files = [
+                resolve_meta_encoding_file(f, cache_root, bundled_utils_path)
+                for f in (meta_files or [])
+            ]
+            encoding_files = [str(p) for p in resolved_meta_files] + [
+                str(p) for p in base_encodings
+            ]
+            resolved_meta_string = (
+                rewrite_includes(meta_string, bundled_utils_path)
+                if meta_string is not None
+                else None
             )
-            logger.info(
-                (
-                    "Grounding and solving program parts "
-                    "%s of transformation meta-encoding files %s and string '%s'."
-                ),
-                parts,
-                encoding_files,
-                meta_string,
-            )
-            for fi in encoding_files:
-                control.load(fi)
-            if meta_string is not None:
-                control.add(meta_string)
-            with control.backend() as backend:
-                for fact in self.facts:
-                    atom = backend.add_atom(fact)
-                    backend.add_rule([atom])
-            control.ground(parts=parts)
-            self.next_transform_program = None
-            control.solve(on_model=self._on_transform_model)
-            if self._pending_source_changes:
-                self._re_reify_changed_subtrees(self._pending_source_changes, control)
-                self._pending_source_changes = {}
+            while self.next_transform_program is not None:
+                logger.debug("Initializing clingo.Control with options %s.", options)
+                control = Control(arguments=options, logger=clingo_logger)
+                parts = (
+                    [base_program]
+                    if self.next_transform_program == base_program
+                    else [base_program, self.next_transform_program]
+                )
+                logger.info(
+                    (
+                        "Grounding and solving program parts "
+                        "%s of transformation meta-encoding files %s and string '%s'."
+                    ),
+                    parts,
+                    encoding_files,
+                    meta_string,
+                )
+                for fi in encoding_files:
+                    control.load(fi)
+                if resolved_meta_string is not None:
+                    control.add(resolved_meta_string)
+                with control.backend() as backend:
+                    for fact in self.facts:
+                        atom = backend.add_atom(fact)
+                        backend.add_rule([atom])
+                control.ground(parts=parts)
+                self.next_transform_program = None
+                control.solve(on_model=self._on_transform_model)
+                if self._pending_source_changes:
+                    self._re_reify_changed_subtrees(self._pending_source_changes, control)
+                    self._pending_source_changes = {}
 
     def _on_transform_model(  # pylint: disable=too-many-statements
         self, model: Model
