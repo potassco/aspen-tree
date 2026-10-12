@@ -1,5 +1,5 @@
-#include "../utils/generic/queries/descendant.lp".
-#include "../utils/generic/queries/path_of_node.lp".
+#include "@aspen/generic/queries/descendant.lp".
+#include "@aspen/generic/queries/path_of_node.lp".
 
 #script (python)
 

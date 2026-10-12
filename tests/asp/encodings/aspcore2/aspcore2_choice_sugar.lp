@@ -1,8 +1,8 @@
-#include "../../../../src/aspen/asp/utils/generic/raise_syntax_error.lp".    %%#(\label{lst:choice:include-start}#)
-#include "../../../../src/aspen/asp/utils/clingo/derived_predicates/named_child_index.lp".
-#include "../../../../src/aspen/asp/utils/generic/queries/make_list.lp".
+#include "@aspen/generic/raise_syntax_error.lp".    %%#(\label{lst:choice:include-start}#)
+#include "@aspen/clingo/derived_predicates/named_child_index.lp".
+#include "@aspen/generic/queries/make_list.lp".
 
-#include "../../../../src/aspen/asp/utils/aspcore2/derived_predicates/symbol_signature.lp". %%#(\label{lst:choice:include-end}#)
+#include "@aspen/aspcore2/derived_predicates/symbol_signature.lp". %%#(\label{lst:choice:include-end}#)
 
 choice(R,E) :-                                                             %%%%#(\label{lst:choice:choice-start}#)
   type(R,"rule"),

@@ -386,8 +386,12 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 resolve_meta_encoding_file(f, cache_root, bundled_utils_path)
                 for f in (meta_files or [])
             ]
+            resolved_base_encodings = [
+                resolve_meta_encoding_file(f, cache_root, bundled_utils_path)
+                for f in base_encodings
+            ]
             encoding_files = [str(p) for p in resolved_meta_files] + [
-                str(p) for p in base_encodings
+                str(p) for p in resolved_base_encodings
             ]
             resolved_meta_string = (
                 rewrite_includes(meta_string, bundled_utils_path)

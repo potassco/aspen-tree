@@ -79,6 +79,28 @@ class TestResolveMetaEncodingFile(TestCaseWithRedirectedLogs):
             result = resolve_meta_encoding_file(main, Path(cache), bundled)
             self.assertEqual(result, main.resolve())
 
+    def test_diamond_shaped_include_graph_without_aspen_prefix_is_a_no_op(
+        self,
+    ) -> None:
+        """Test that a diamond-shaped local #include graph (main
+        includes both a and b, both of which include the same shared
+        file) where nothing anywhere uses '@aspen/' is detected as
+        needing no rewriting, with shared only checked once rather
+        than once per parent."""
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as cache:
+            tmp_path = Path(tmp)
+            bundled = tmp_path / "bundled"
+            shared = tmp_path / "shared.lp"
+            shared.write_text("shared.")
+            a_path = tmp_path / "a.lp"
+            a_path.write_text('#include "./shared.lp".\na.')
+            b_path = tmp_path / "b.lp"
+            b_path.write_text('#include "./shared.lp".\nb.')
+            main = tmp_path / "main.lp"
+            main.write_text('#include "./a.lp".\n#include "./b.lp".\nmain.')
+            result = resolve_meta_encoding_file(main, Path(cache), bundled)
+            self.assertEqual(result, main.resolve())
+
     def test_mirrors_file_that_directly_uses_aspen_prefix(self) -> None:
         """Test that a file directly using '@aspen/' is mirrored into
         cache_root, with the include rewritten to the real bundled
