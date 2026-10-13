@@ -107,6 +107,37 @@ class TestMetaAsp(AspenTestCase):
         expected_code.sort()
         self.assertListEqual(code, expected_code)
 
+    def assert_generated_externals(self, type_file: str, input_file: str) -> None:
+        """Assert that generating externals for the input file using the
+        given type definitions results in the expected output file,
+        ignoring the order of lines."""
+        tree = AspenTree(default_language=metasp_lang)
+        tree.parse(metasp_inp_dir / type_file)
+        source = tree.sources[tree.parse(metasp_inp_dir / input_file)]
+        tree.transform(
+            meta_files=[
+                metasp_enc_dir / "metasp_main.lp",
+                metasp_enc_dir / "metasp_exceptions.lp",
+            ],
+            initial_program=preprocess_program,
+        )
+        code = str(source.source_bytes, encoding=source.encoding).splitlines()
+        expected_code = (metasp_out_dir / input_file).read_text().splitlines()
+        self.assertListEqual(
+            sorted(l for l in code if l != "" and not l.startswith("%")),
+            sorted(l for l in expected_code if l != "" and not l.startswith("%")),
+        )
+
+    def test_metasp_generate_externals_mel(self) -> None:
+        """Test that no externals are generated for operands of
+        non-formula types such as the bounds of mel intervals."""
+        self.assert_generated_externals("mel_type.lp", "metasp_mel_gen_externals.lp")
+
+    def test_metasp_generate_externals_num(self) -> None:
+        """Test that numbers are not treated as atoms when generating
+        externals, even when given as constants in safe positions."""
+        self.assert_generated_externals("num_type.lp", "metasp_num_gen_externals.lp")
+
     def test_metasp_bad_syntax(self) -> None:
         """Test that error is raised when a metasp function is not reachable."""
         self.assert_transform_raises(

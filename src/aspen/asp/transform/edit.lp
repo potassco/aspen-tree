@@ -37,13 +37,24 @@ aspen(target(replace(N,S),N)) :- aspen(replace(N,S)).
 
 % aspen(comes_before(Edit',Edit)) means Edit' must occur before Edit
 % for the text replacement to be correct.
+% The join is split into small steps, so that only descendants of
+% nodes inserted by edits are checked against replacement targets
+% (instead of all pairs of templates and replacements).
+aspen(_edit_insert(replace(N, S), InsertNode)) :-
+  aspen(replace(N, S)), aspen(node_in_template(S, node(InsertNode))).
+aspen(_edit_insert(append(N, S), InsertNode)) :-
+  aspen(append(N, S)), aspen(node_in_template(S, node(InsertNode))).
+aspen(_edit_insert(prepend(N, S), InsertNode)) :-
+  aspen(prepend(N, S)), aspen(node_in_template(S, node(InsertNode))).
+
+aspen(_edit_insert_desc(Edit, Node)) :-
+  aspen(_edit_insert(Edit, InsertNode)),
+  aspen(return(query(descendant(InsertNode)), Node)).
+
 aspen(comes_before(replace(node(TargetNode), S'), Edit)) :-
-  aspen(Edit),
-  Edit = (replace(N, S);append(N, S);prepend(N, S)),
-  aspen(node_in_template(S, node(InsertNode))),
+  aspen(_edit_insert_desc(Edit, TargetNode)),
   aspen(replace(node(TargetNode), S')),
-  Edit != replace(node(TargetNode), S'),
-  aspen(return(query(descendant(InsertNode)), TargetNode)).
+  Edit != replace(node(TargetNode), S').
 
 % query the paths of node ids that occur as targets or as inserts
 % in templates, so that they can be used by aspen to find the

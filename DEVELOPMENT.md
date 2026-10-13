@@ -35,6 +35,20 @@ python -m pipx install pre-commit
 pre-commit install
 ```
 
+## Benchmarks
+
+The `benchmarks` directory contains scripts to measure the performance of
+transformation pipelines. For example, the metasp preprocessing pipeline can be
+benchmarked on the metasp examples and on generated inputs of increasing size
+with
+
+```bash
+python benchmarks/metasp.py --copies 1 20 80 --repeat 3
+```
+
+Use `--list` to show the available cases and `--cases` to select some of them
+by glob patterns, e.g. `--cases 'tel/*' 'generated/*'`.
+
 ## Documentation
 
 Make sure the documentation dependencies for the project are properly installed

@@ -43,7 +43,6 @@ expression_sig(TypeName, ExpDef, (IdName, @string_to_num(Arity))) :-
 
 arg_kwarg((IdName, Arity), Idx, KwargNameText, KwargValText) :-
   expression_sig(TypeName, ExpDef, (IdName, Arity)),
-  type_name(MetaType, TypeName),
   child(ExpDef, Args),
   type(Args, "metasp_argument_definitions"),
   child(Args, Arg),
@@ -95,7 +94,7 @@ var(TypeName, VarName, VarType) :-
 subtype(SubTypeName, TypeName) :-
   type_name(MetaType, TypeName),
   child(MetaType, Subtypes),
-  type(Occ, "metasp_subtypes"),
+  type(Subtypes, "metasp_subtypes"),
   child(Subtypes, Id),
   type(Id, "identifier"),
   leaf_text(Id, SubTypeName).

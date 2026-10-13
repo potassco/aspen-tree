@@ -147,6 +147,33 @@ root_symbol2leaf_operand(Root, Symb, Safety) :-
   not metasp_operand(Symb,_,_).
 
 
+% determine which leaf operands are atoms.
+
+% A type can contain atoms if it is the atom type, has a subtype that
+% can contain atoms, or has a macro turning a variable of such a type
+% into an expression of the type (e.g. "a: &seq(&test(a), &step)").
+atomic_type("atom").
+atomic_type(TypeName) :- subtype(SubTypeName, TypeName), atomic_type(SubTypeName).
+atomic_type(TypeName) :-
+  macro(TypeName, Head, _),
+  type(Head, "identifier"),
+  leaf_text(Head, VarName),
+  var(TypeName, VarName, VarType),
+  atomic_type(VarType).
+
+% Operands in positions whose type cannot contain atoms, such as
+% numbers or intervals, are terms and not atoms.
+term_operand(O) :-
+  metasp_operand(N, Idx, O),
+  symbol_signature(N, Sig),
+  extended_arg_kwarg(Sig, Idx, "type", TypeName),
+  not atomic_type(TypeName).
+
+root_symbol2atom_leaf(Root, Leaf, Safety) :-
+  root_symbol2leaf_operand(Root, Leaf, Safety),
+  not term_operand(Leaf).
+
+
 % deal with macros
 
 
@@ -169,6 +196,12 @@ aspen(query(descendant(Body))) :- valid_macro(TypeName, Head, Body).
 in_macro_body(Body, Node) :-
   valid_macro(TypeName, Head, Body),
   aspen(return(query(descendant(Body)), Node)).
+
+extended_arg_kwarg(Sig, Idx, "type", VarType) :-
+  valid_macro(TypeName, Head, Body),
+  symbol_signature(Head, Sig),
+  macro_head_var(TypeName, Head, Body, Idx, Name),
+  var(TypeName, Name, VarType).
 
 extended_arg_kwarg(Sig, Idx, "safety", "safe") :-
   valid_macro(TypeName, Head, Body),
@@ -200,19 +233,21 @@ statement(SourceSymb, Statement) :-
   source_root(SourceSymb, Source),
   not type(Statement, "metasp_type").
 
-aspen(query(descendant(Statement))) :- statement(_, Statement).
-
-statement_desc(Statement, Node) :-
-  aspen(return(query(descendant(Statement)), Node)),
-  statement(_, Statement).
+% Find the statements containing metasp symbols by walking upwards from
+% the symbols, so that only these statements need to be traversed.
+metasp_symbol_ancestor(Parent) :- metasp_symbol(N), child(Parent, N).
+metasp_symbol_ancestor(Parent) :-
+  metasp_symbol_ancestor(N), child(Parent, N), not statement(_, N).
 
 metasp_statement(Statement) :-
-  statement_desc(Statement, Node),
-  metasp_symbol(Node).
+  metasp_symbol_ancestor(Statement),
+  statement(_, Statement).
+
+aspen(query(descendant(Statement))) :- metasp_statement(Statement).
 
 metasp_statement_desc(Statement, Node) :-
-  metasp_statement(Statement),
-  statement_desc(Statement, Node).
+  aspen(return(query(descendant(Statement)), Node)),
+  metasp_statement(Statement).
 
 % The head of an external generated for a head root symbol of the
 % original statement is a leaf operand of the root symbol.
@@ -220,7 +255,7 @@ ext_head(HeadRoot, HeadLeaf) :-
   metasp_statement_desc(Statement, HeadRoot),
   root_symbol_occurrence(HeadRoot, "head"),
   type(HeadRoot, "metasp_symbolic_atom"),
-  root_symbol2leaf_operand(HeadRoot, HeadLeaf, _).
+  root_symbol2atom_leaf(HeadRoot, HeadLeaf, _).
 
 % The head of an external generated for a body metasp symbolic atom of
 % the original statement is the metasp symbolic atom itself
@@ -237,7 +272,7 @@ ext_body(HeadLeaf, BodyLeaf) :-
   ext_head(_,HeadLeaf),
   metasp_statement_desc(Statement, BodyRoot),
   safe_occurrence(BodyRoot),
-  root_symbol2leaf_operand(BodyRoot, BodyLeaf, "safe"),
+  root_symbol2atom_leaf(BodyRoot, BodyLeaf, "safe"),
   symbol(BodyLeaf).
 
 % If the operator is part of a condition (as head or body), we need to
@@ -269,5 +304,5 @@ ext_body(Leaf, CondBodyLeaf) :-
   type(Lit, "literal"),
   positive(Lit),
   child(Lit, CondBodyRoot),
-  root_symbol2leaf_operand(CondBodyRoot, CondBodyLeaf, "safe"),
+  root_symbol2atom_leaf(CondBodyRoot, CondBodyLeaf, "safe"),
   symbol(CondBodyLeaf).
