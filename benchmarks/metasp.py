@@ -13,6 +13,14 @@ to this script, and of generated programs consisting of copies of the
 metasp integration test input with predicates renamed apart, which
 allow measuring how the pipeline scales.
 
+Besides the total time, the time spent in the phases of a run is
+reported: parsing and reification of the sources, and, for each
+transformation step, loading facts into clingo, grounding, solving, the
+python model callbacks processing the results (symbol dispatch,
+editing and reparsing the sources), and re-reification of the edited
+subtrees. Only phases taking a significant share of the total time are
+shown (see --min-share).
+
 Example:
 
     python benchmarks/metasp.py --copies 1 20 80 --repeat 3
@@ -24,10 +32,12 @@ import logging
 import re
 import sys
 import time
-from collections.abc import Iterator, Sequence
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
+from functools import wraps
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -122,34 +132,146 @@ def generated_case(copies: int, input_dir: Path) -> Case:
     )
 
 
+Phase = tuple[str, ...]
+
+
+class PhaseTimer:
+    """Accumulate the wall-clock time spent in nested phases.
+
+    Phases are identified by their path of enclosing phases, so that
+    e.g. grounding during re-reification is reported separately from
+    grounding of the transformation encodings."""
+
+    def __init__(self) -> None:
+        self.stack: list[str] = []
+        self.times: dict[Phase, float] = defaultdict(float)
+        self.calls: Counter[Phase] = Counter()
+
+    @contextmanager
+    def phase(self, name: str) -> Iterator[None]:
+        """Attribute the time spent within the context to the given phase."""
+        self.stack.append(name)
+        key = tuple(self.stack)
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.times[key] += time.perf_counter() - start
+            self.calls[key] += 1
+            self.stack.pop()
+
+    def children(self, key: Phase) -> list[Phase]:
+        """Return the direct sub-phases of the given phase, slowest first."""
+        return sorted(
+            (k for k in self.times if len(k) == len(key) + 1 and k[:-1] == key),
+            key=lambda k: -self.times[k],
+        )
+
+    def report(self, total: float, min_share: float) -> Iterator[str]:
+        """Yield report lines for all phases that took at least the
+        given share of the total time. The time of a phase not spent
+        in any of its sub-phases is reported as (self)."""
+
+        def line(depth: int, name: str, duration: float, calls: int = 1) -> str:
+            label = "  " * depth + name + (f" x{calls}" if calls > 1 else "")
+            return f"  {label:<52}{duration:8.3f}s {duration / total:6.1%}"
+
+        def visit(key: Phase) -> Iterator[str]:
+            duration = self.times[key]
+            if duration < min_share * total:
+                return
+            yield line(len(key) - 1, key[-1], duration, self.calls[key])
+            children = self.children(key)
+            for child in children:
+                yield from visit(child)
+            rest = duration - sum(self.times[c] for c in children)
+            if children and rest >= min_share * total:
+                yield line(len(key), "(self)", rest)
+
+        for key in self.children(()):
+            yield from visit(key)
+
+
 @contextmanager
-def record_ground_times() -> Iterator[list[tuple[str, float]]]:
-    """Record the program parts and duration of each clingo grounding
-    call made within the context."""
-    times: list[tuple[str, float]] = []
-    original_ground = Control.ground
+def instrument(timer: PhaseTimer) -> Iterator[None]:
+    """Record the time spent in the parts of aspen and clingo where
+    significant time is spent during a transformation."""
+    patched: list[tuple[type, str, Any]] = []
 
-    def timed_ground(self: Control, *args: Any, **kwargs: Any) -> None:
-        parts = kwargs.get("parts", args[0] if args else [("base", ())])
-        start = time.perf_counter()
-        original_ground(self, *args, **kwargs)
-        times.append((", ".join(name for name, _ in parts), time.perf_counter() - start))
+    def patch(cls: type, attr: str, wrapper: Callable[..., Any]) -> None:
+        original = getattr(cls, attr)
+        patched.append((cls, attr, original))
+        setattr(cls, attr, wraps(original)(wrapper(original)))
 
-    Control.ground = timed_ground  # type: ignore[method-assign]
+    def timed(name: str) -> Callable[..., Any]:
+        def wrapper(original: Callable[..., Any]) -> Callable[..., Any]:
+            def call(*args: Any, **kwargs: Any) -> Any:
+                with timer.phase(name):
+                    return original(*args, **kwargs)
+
+            return call
+
+        return wrapper
+
+    def timed_ground(original: Callable[..., Any]) -> Callable[..., Any]:
+        def call(self: Control, *args: Any, **kwargs: Any) -> Any:
+            parts = kwargs.get("parts", args[0] if args else [("base", ())])
+            with timer.phase(f"ground [{', '.join(n for n, _ in parts)}]"):
+                return original(self, *args, **kwargs)
+
+        return call
+
+    def timed_solve(original: Callable[..., Any]) -> Callable[..., Any]:
+        def call(self: Control, *args: Any, **kwargs: Any) -> Any:
+            on_model = kwargs.get("on_model")
+            if on_model is not None:
+
+                def timed_on_model(model: Any) -> Any:
+                    with timer.phase("model callback (python)"):
+                        return on_model(model)
+
+                kwargs["on_model"] = timed_on_model
+            with timer.phase("solve"):
+                return original(self, *args, **kwargs)
+
+        return call
+
+    def timed_backend(original: Callable[..., Any]) -> Callable[..., Any]:
+        @contextmanager
+        def call(self: Control) -> Iterator[Any]:
+            with timer.phase("add facts"), original(self) as backend:
+                yield backend
+
+        return call
+
+    patch(AspenTree, "parse", timed("parse"))
+    patch(AspenTree, "_reify_ts_tree", timed("reify tree"))
+    patch(AspenTree, "transform", timed("transform"))
+    patch(AspenTree, "_topological_sort_edits", timed("sort edits"))
+    patch(AspenTree, "_edit_sources_from_symbs", timed("edit sources"))
+    patch(AspenTree, "_reparse_sources", timed("reparse sources"))
+    patch(AspenTree, "_re_reify_changed_subtrees", timed("re-reify"))
+    patch(AspenTree, "_reify_changed_siblings", timed("reify changed subtrees"))
+    patch(Control, "load", timed("load encodings"))
+    patch(Control, "backend", timed_backend)
+    patch(Control, "ground", timed_ground)
+    patch(Control, "solve", timed_solve)
     try:
-        yield times
+        yield
     finally:
-        Control.ground = original_ground  # type: ignore[method-assign]
+        for cls, attr, original in reversed(patched):
+            setattr(cls, attr, original)
 
 
-def run(case: Case) -> tuple[float, list[tuple[str, float]]]:
-    """Transform the files of the given case, returning the total time
-    and the time of each grounding step."""
-    tree = AspenTree(default_language=metasp_lang)
-    for path in case.syntax + case.files:
-        tree.parse(path)
-    with StringIO() as fact_buf, record_ground_times() as ground_times:
+def run(case: Case) -> tuple[float, PhaseTimer]:
+    """Parse and transform the files of the given case, returning the
+    total time and the times of the phases."""
+    timer = PhaseTimer()
+    with StringIO() as fact_buf, instrument(timer):
         start = time.perf_counter()
+        tree = AspenTree(default_language=metasp_lang)
+        for path in case.syntax + case.files:
+            tree.parse(path)
         if case.stage == "preprocess":
             tree.textio_symbols[Function("fact_file", [])] = fact_buf
             tree.transform(
@@ -170,7 +292,7 @@ def run(case: Case) -> tuple[float, list[tuple[str, float]]]:
                 initial_program=("metasp_remove_ampersand", ()),
             )
         total = time.perf_counter() - start
-    return total, ground_times
+    return total, timer
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -203,6 +325,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="write the generated inputs to this directory",
     )
     parser.add_argument(
+        "--min-share",
+        type=float,
+        default=5.0,
+        metavar="PERCENT",
+        help="hide phases taking less than this share of the total (default: 5)",
+    )
+    parser.add_argument(
         "--list", action="store_true", help="list the selected cases and exit"
     )
     args = parser.parse_args(argv)
@@ -217,12 +346,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             if args.list:
                 print(f"{case.name} ({case.stage})")
                 continue
-            total, ground_times = min(
+            total, timer = min(
                 (run(case) for _ in range(args.repeat)), key=lambda r: r[0]
             )
-            print(f"{case.name} ({case.stage}): transform {total:.3f}s")
-            for parts, duration in ground_times:
-                print(f"  ground {duration:.3f}s  [{parts}]")
+            print(f"{case.name} ({case.stage}): total {total:.3f}s")
+            for line in timer.report(total, args.min_share / 100):
+                print(line)
 
 
 if __name__ == "__main__":

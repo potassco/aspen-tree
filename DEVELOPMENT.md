@@ -47,7 +47,10 @@ python benchmarks/metasp.py --copies 1 20 80 --repeat 3
 ```
 
 Use `--list` to show the available cases and `--cases` to select some of them
-by glob patterns, e.g. `--cases 'tel/*' 'generated/*'`.
+by glob patterns, e.g. `--cases 'tel/*' 'generated/*'`. Besides the total time,
+the script reports the time spent in the phases of the pipeline, both in clingo
+and in the python code of aspen; phases taking less than 5% of the total are
+hidden, which can be changed with `--min-share`.
 
 ## Documentation
 
