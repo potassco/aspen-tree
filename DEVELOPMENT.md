@@ -50,7 +50,9 @@ Use `--list` to show the available cases and `--cases` to select some of them
 by glob patterns, e.g. `--cases 'tel/*' 'generated/*'`. Besides the total time,
 the script reports the time spent in the phases of the pipeline, both in clingo
 and in the python code of aspen; phases taking less than 5% of the total are
-hidden, which can be changed with `--min-share`.
+hidden, which can be changed with `--min-share`. With `--skip-final-re-reify`,
+the sources are not re-reified after the final transformation step, as done by
+`aspen transform` unless `--facts` is given.
 
 ## Documentation
 

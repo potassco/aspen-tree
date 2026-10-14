@@ -263,7 +263,7 @@ def instrument(timer: PhaseTimer) -> Iterator[None]:
             setattr(cls, attr, original)
 
 
-def run(case: Case) -> tuple[float, PhaseTimer]:
+def run(case: Case, skip_final_re_reify: bool = False) -> tuple[float, PhaseTimer]:
     """Parse and transform the files of the given case, returning the
     total time and the times of the phases."""
     timer = PhaseTimer()
@@ -285,11 +285,13 @@ def run(case: Case) -> tuple[float, PhaseTimer]:
                     'aspen(next_program("metasp_remove_ampersand", ())).'
                 ),
                 initial_program=("metasp_preprocess", ()),
+                skip_final_re_reify=skip_final_re_reify,
             )
         else:
             tree.transform(
                 meta_files=[metasp_enc_dir / "metasp_remove_ampersand.lp"],
                 initial_program=("metasp_remove_ampersand", ()),
+                skip_final_re_reify=skip_final_re_reify,
             )
         total = time.perf_counter() - start
     return total, timer
@@ -332,6 +334,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="hide phases taking less than this share of the total (default: 5)",
     )
     parser.add_argument(
+        "--skip-final-re-reify",
+        action="store_true",
+        help=(
+            "skip re-reification after the final transformation step, as "
+            "the aspen command line does when the facts are not printed"
+        ),
+    )
+    parser.add_argument(
         "--list", action="store_true", help="list the selected cases and exit"
     )
     args = parser.parse_args(argv)
@@ -347,7 +357,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 print(f"{case.name} ({case.stage})")
                 continue
             total, timer = min(
-                (run(case) for _ in range(args.repeat)), key=lambda r: r[0]
+                (run(case, args.skip_final_re_reify) for _ in range(args.repeat)),
+                key=lambda r: r[0],
             )
             print(f"{case.name} ({case.stage}): total {total:.3f}s")
             for line in timer.report(total, args.min_share / 100):

@@ -116,12 +116,36 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         self.default_language = default_language
         self.default_encoding = default_encoding
         self.raise_syntax_errors = raise_syntax_errors
-        self.facts: List[Symbol] = []
+        self._facts: List[Symbol] = []
+        self._facts_outdated = False
         self.next_transform_program: Optional[tuple[str, Sequence[Symbol]]] = None
         self.textio_symbols = {} if textio_symbols is None else textio_symbols
         self._id_generator = id_counter() if id_generator is None else id_generator
         self._node_id2source_path: dict[Symbol, Symbol] = {}
         self._pending_source_changes: dict[Symbol, list[Change]] = {}
+        self._skip_final_re_reify = False
+
+    @property
+    def facts(self) -> List[Symbol]:
+        """The fact representation of the sources.
+
+        If re-reification was skipped after the last step of a
+        transformation (see the skip_final_re_reify option of
+        transform()), the sources are reified anew on first access.
+        """
+        if self._facts_outdated:
+            logger.info("Reifying all sources, as their facts are outdated.")
+            self._node_id2source_path = {}
+            self._facts = []
+            for source in self.sources.values():
+                self._facts.extend(self._reify_source(source))
+            self._facts_outdated = False
+        return self._facts
+
+    @facts.setter
+    def facts(self, facts: List[Symbol]) -> None:
+        self._facts = facts
+        self._facts_outdated = False
 
     def _path_symb2py(self, path_symb: Symbol) -> list[int]:
         """Convert path expression from symbolic to list form."""
@@ -238,10 +262,15 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             identifier, source_bytes, path, encoding, parser, tree, destination
         )
         self.sources[identifier] = processed_source
-        self.facts.extend(self._reify_ts_tree(tree, processed_source))
-        if path is not None:
-            self.facts.append(Function("source_path", [identifier, String(str(path))]))
+        self.facts.extend(self._reify_source(processed_source))
         return identifier
+
+    def _reify_source(self, source: Source) -> list[Symbol]:
+        """Reify the current parse tree of a source, along with its path."""
+        facts = self._reify_ts_tree(source.tree, source)
+        if source.path is not None:
+            facts.append(Function("source_path", [source.id, String(str(source.path))]))
+        return facts
 
     def write(self) -> None:
         """Write every source's current text to its associated
@@ -318,20 +347,44 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 prev_child_id = child_id
                 stack.append((child_id, child))
         if self.raise_syntax_errors and syntax_error_nodes:
-            language = source.parser.language
-            assert language is not None
-            syntax_error_nodes.sort(
-                key=lambda node: (node.start_point.row, node.start_point.column)
-            )
-            source_str = self._source_str(source)
-            messages = [
-                format_syntax_error(
-                    node, source.source_bytes, source.encoding, language, source_str
-                )
-                for node in syntax_error_nodes
-            ]
-            raise TransformError("\n".join(messages))
+            self._raise_syntax_errors(source, syntax_error_nodes)
         return facts
+
+    def _raise_syntax_errors(
+        self, source: Source, syntax_error_nodes: list[ts.Node]
+    ) -> None:
+        """Raise a TransformError describing the given ERROR/MISSING
+        nodes of a source, sorted by position."""
+        language = source.parser.language
+        assert language is not None
+        syntax_error_nodes.sort(
+            key=lambda node: (node.start_point.row, node.start_point.column)
+        )
+        source_str = self._source_str(source)
+        messages = [
+            format_syntax_error(
+                node, source.source_bytes, source.encoding, language, source_str
+            )
+            for node in syntax_error_nodes
+        ]
+        raise TransformError("\n".join(messages))
+
+    def _check_syntax_errors(self, source: Source) -> None:
+        """Raise a TransformError if the current parse tree of the
+        source contains ERROR/MISSING nodes, and raise_syntax_errors
+        is set. Only descends into subtrees containing errors."""
+        if not self.raise_syntax_errors:
+            return
+        syntax_error_nodes: list[ts.Node] = []
+        stack = [source.tree.root_node]
+        while stack:
+            node = stack.pop()
+            if node.is_error or node.is_missing:
+                syntax_error_nodes.append(node)
+            if node.has_error:
+                stack.extend(node.children)
+        if syntax_error_nodes:
+            self._raise_syntax_errors(source, syntax_error_nodes)
 
     def _reify_ts_tree(self, tree: ts.Tree, source: Source) -> list[Symbol]:
         """Reify tree-sitter tree into a set of facts."""
@@ -370,8 +423,19 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         meta_string: Optional[str] = None,
         initial_program: tuple[str, Sequence[Symbol]] = ("base", ()),
         control_options: Optional[Sequence[str]] = None,
+        skip_final_re_reify: bool = False,
     ) -> None:
-        """Transform fact base via a meta-encoding."""
+        """Transform fact base via a meta-encoding.
+
+        If skip_final_re_reify is set, the sources edited in the last
+        step of the transformation (the one not deriving
+        aspen(next_program(...))) are re-parsed, but not re-reified,
+        which saves time when the resulting facts are not needed.
+        Syntax errors introduced by the edits are still detected. If
+        the facts are accessed afterwards, all sources are reified
+        anew.
+        """
+        self._skip_final_re_reify = skip_final_re_reify
         options = control_options if control_options is not None else []
         if meta_files is not None:  # nocoverage
             for f in meta_files:
@@ -605,7 +669,14 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
 
         sorted_edit_symbols = self._topological_sort_edits(edit_symbols, deps)
         edited_sources.update(self._edit_sources_from_symbs(sorted_edit_symbols))
-        self._pending_source_changes = self._reparse_sources(edited_sources)
+        if self._skip_final_re_reify and self.next_transform_program is None:
+            self._reparse_sources(edited_sources, compute_changes=False)
+            for source_symb in edited_sources:
+                self._check_syntax_errors(self.sources[source_symb])
+            if edited_sources:
+                self._facts_outdated = True
+        else:
+            self._pending_source_changes = self._reparse_sources(edited_sources)
         return False
 
     def _source_str(self, source: Source) -> str:
@@ -809,9 +880,12 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             edited_sources.add(target_source.id)
         return edited_sources
 
-    def _reparse_sources(self, edited_sources: set[Symbol]) -> dict[Symbol, list[Change]]:
+    def _reparse_sources(
+        self, edited_sources: set[Symbol], compute_changes: bool = True
+    ) -> dict[Symbol, list[Change]]:
         """Re-parse sources that have been edited, and return the
-        changes found for each, to be re-reified by the caller.
+        changes found for each, to be re-reified by the caller (if
+        compute_changes is set, otherwise no changes are returned).
         """
         source_changes: dict[Symbol, list[Change]] = {}
         for source_symb in edited_sources:
@@ -824,9 +898,9 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             new_tree = source.parser.parse(
                 source.source_bytes, old_tree, encoding=source.encoding
             )
-            changes = get_tree_changes(old_tree, new_tree)
             source.tree = new_tree
-            source_changes[source_symb] = changes
+            if compute_changes:
+                source_changes[source_symb] = get_tree_changes(old_tree, new_tree)
         return source_changes
 
     def _log_change(self, change: Change) -> None:  # nocoverage

@@ -26,7 +26,7 @@ from aspen.cli import (
 from aspen.tree import TransformError
 from aspen.utils.log import TestCaseWithRedirectedLogs
 
-from .common import encoding_dir
+from .common import encoding_dir, spy_re_reify
 
 
 def _reify_namespace(**overrides: object) -> Namespace:
@@ -453,6 +453,24 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
             output = buf.getvalue()
         self.assertIn('language(s(0),"clingo").', output)
         self.assertNotIn("a(X) :- b(X).", output)
+
+    def test_cmd_transform_skips_final_re_reify_without_facts_flag(self) -> None:
+        """Test that transform only re-reifies the sources after the
+        final transformation step if --facts is given, as the facts
+        are not needed otherwise."""
+        for facts, expected_calls in ((False, 0), (True, 1)):
+            with tempfile.TemporaryDirectory() as tmp:
+                source_path = Path(tmp) / "in.lp"
+                source_path.write_text("a :- b.")
+                args = _transform_namespace(
+                    source=[str(source_path)],
+                    meta_file=[encoding_dir / "add_var.lp"],
+                    program='add_var_to_atoms("X")',
+                    facts=facts,
+                )
+                with spy_re_reify() as re_reify, redirect_stdout(io.StringIO()):
+                    cmd_transform(args)
+                self.assertEqual(re_reify.call_count, expected_calls)
 
     def test_cmd_transform_facts_flag_rejects_destination(self) -> None:
         """Test that --facts rejects a ':DEST' on any source: it

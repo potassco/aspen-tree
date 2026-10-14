@@ -60,6 +60,7 @@ class AspenTestCase(TestCaseWithRedirectedLogs):
         meta_string: Optional[str] = None,
         initial_program: tuple[str, Sequence[Symbol]] = ("base", ()),
         control_options: Optional[Sequence[str]] = None,
+        skip_final_re_reify: bool = False,
     ) -> None:
         """Assert that transformation results in expected string, and
         check that reified representation is isomorphic."""
@@ -71,6 +72,7 @@ class AspenTestCase(TestCaseWithRedirectedLogs):
             meta_string=meta_string,
             initial_program=initial_program,
             control_options=control_options,
+            skip_final_re_reify=skip_final_re_reify,
         )
         transformed_source_strs = [
             str(s.source_bytes, encoding=s.encoding).replace("\r\n", "\n")
@@ -171,6 +173,7 @@ class AspenTestCase(TestCaseWithRedirectedLogs):
         meta_string: Optional[str] = None,
         initial_program: tuple[str, Sequence[Symbol]] = ("base", ()),
         control_options: Optional[Sequence[str]] = None,
+        skip_final_re_reify: bool = False,
     ) -> None:
         """Assert that transformation raises error."""
         tree = AspenTree(default_language=language)
@@ -183,4 +186,5 @@ class AspenTestCase(TestCaseWithRedirectedLogs):
                 meta_string=meta_string,
                 initial_program=initial_program,
                 control_options=control_options,
+                skip_final_re_reify=skip_final_re_reify,
             )

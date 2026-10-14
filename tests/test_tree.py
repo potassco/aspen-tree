@@ -12,7 +12,7 @@ from aspen.tree import AspenTree, TransformError, generic_util_path
 from aspen.utils.testing import AspenTestCase
 from aspen.utils.tree_sitter_utils import get_node_at_path
 
-from .common import clingo_lang, encoding_dir, input_dir, output_dir
+from .common import clingo_lang, encoding_dir, input_dir, output_dir, spy_re_reify
 
 
 class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
@@ -263,6 +263,59 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             ],
             initial_program=("rename_x_to_y", [String("a"), String("b")]),
             expected_sources=["b(X) :- b(X)."],
+        )
+
+    def test_transform_skip_final_re_reify(self) -> None:
+        """Test that when skipping re-reification after the final
+        transformation step, the facts are reified anew on access."""
+        tree = AspenTree(default_language=clingo_lang)
+        tree.parse("a :- b.")
+        with spy_re_reify() as re_reify:
+            tree.transform(
+                meta_files=[encoding_dir / "add_var.lp"],
+                initial_program=("add_var_to_atoms", [String("X")]),
+                skip_final_re_reify=True,
+            )
+            re_reify.assert_not_called()
+        source = tree.sources[Function("s", [Number(0)])]
+        self.assertEqual(source.source_bytes, b"a(X) :- b(X).")
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["a :- b."],
+            meta_files=[encoding_dir / "add_var.lp"],
+            initial_program=("add_var_to_atoms", [String("X")]),
+            expected_sources=["a(X) :- b(X)."],
+            skip_final_re_reify=True,
+        )
+
+    def test_transform_skip_final_re_reify_multiple_steps(self) -> None:
+        """Test that when skipping re-reification after the final
+        transformation step, it is still done after the steps before,
+        as the following steps need the facts."""
+        with spy_re_reify() as re_reify:
+            self.assert_transform_isomorphic(
+                language=clingo_lang,
+                sources=["a :- b."],
+                meta_files=[
+                    encoding_dir / "rename_a_to_b.lp",
+                    encoding_dir / "add_var.lp",
+                ],
+                initial_program=("rename_x_to_y", [String("a"), String("b")]),
+                expected_sources=["b(X) :- b(X)."],
+                skip_final_re_reify=True,
+            )
+            self.assertEqual(re_reify.call_count, 1)
+
+    def test_transform_skip_final_re_reify_syntax_error(self) -> None:
+        """Test that syntax errors introduced by the final
+        transformation step are raised even when skipping
+        re-reification."""
+        self.assert_transform_raises(
+            message_regex=r"s\(0\):2:1: unexpected '\('\nb\(\.\n \^",
+            language=clingo_lang,
+            sources=["a.\nb."],
+            meta_string='aspen(replace(node(N), "b(")) :- leaf_text(N, "b").',
+            skip_final_re_reify=True,
         )
 
     def test_transform_bad_next_step(self) -> None:

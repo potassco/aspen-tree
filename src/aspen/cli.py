@@ -168,6 +168,9 @@ def cmd_transform(args: Namespace) -> None:
         meta_string=args.meta_string,
         initial_program=_parse_program(args.program),
         control_options=_parse_control_options(args.control_options),
+        # the facts are only needed after the transformation if they
+        # are printed
+        skip_final_re_reify=not args.facts,
     )
     if args.facts:
         print(_format_facts(tree.facts))

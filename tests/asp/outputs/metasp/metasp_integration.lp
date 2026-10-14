@@ -7,6 +7,6 @@ _show.
 _show_term(light(L)) :- green(L).
 _show_atom(red(A)) :- red(A).
 _show_atom(__next(A)) :- __next(A).
-#external __initial.
 #external push(l1).
+#external __initial.
 #external green(L): push(L).
