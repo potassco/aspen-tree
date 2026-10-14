@@ -29,5 +29,7 @@ configure_logging(sys.stderr, logging.DEBUG, sys.stderr.isatty())
 def spy_re_reify() -> Any:
     """Patch re-reification of AspenTree with a mock that calls
     through, to count how often re-reification is done."""
-    method = AspenTree._re_reify_changed_subtrees  # pylint: disable=protected-access
-    return patch.object(AspenTree, method.__name__, autospec=True, side_effect=method)
+    name = "_re_reify_changed_subtrees"
+    return patch.object(
+        AspenTree, name, autospec=True, side_effect=getattr(AspenTree, name)
+    )

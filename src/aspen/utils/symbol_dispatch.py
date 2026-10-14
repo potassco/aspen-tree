@@ -9,7 +9,7 @@ shape-checking are the same mechanism - a nested dispatch table is
 just At(index, AnyOf([...Func/Tup instances with actions...]))."""
 
 import abc
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional, Sequence
 
 from clingo.symbol import Symbol, SymbolType
@@ -181,9 +181,35 @@ class AnyOf(SymbolSpec):
     first-match-wins semantics."""
 
     options: Sequence[SymbolSpec]
+    # For each name of a Func option, the options that can match a
+    # function symbol of that name (in order), and under None, the
+    # options that can match any other symbol. This avoids trying
+    # every option, as accessing attributes of symbols is costly
+    # (relatively speaking).
+    _options_by_name: dict[Optional[str], tuple[SymbolSpec, ...]] = field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        names = {option.name for option in self.options if isinstance(option, Func)}
+        options_by_name: dict[Optional[str], tuple[SymbolSpec, ...]] = {
+            name: tuple(
+                option
+                for option in self.options
+                if not isinstance(option, Func) or option.name == name
+            )
+            for name in names
+        }
+        options_by_name[None] = tuple(
+            option for option in self.options if not isinstance(option, Func)
+        )
+        object.__setattr__(self, "_options_by_name", options_by_name)
 
     def matches(self, symb: Symbol) -> bool:
-        return any(option.matches(symb) for option in self.options)
+        options = self._options_by_name[None]
+        if symb.type == SymbolType.Function:
+            options = self._options_by_name.get(symb.name, options)
+        return any(option.matches(symb) for option in options)
 
 
 @dataclass(frozen=True)

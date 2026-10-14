@@ -18,7 +18,16 @@ from clingo.symbol import Function, Number, String, Symbol, SymbolType, Tuple_
 import aspen
 from aspen.utils.include_resolver import resolve_meta_encoding_file, rewrite_includes
 from aspen.utils.log import get_clingo_logger, get_logger, get_ts_logger
-from aspen.utils.symbol_dispatch import AllOf, AnyOf, At, Func, Str, Tup, dispatch_symbols
+from aspen.utils.symbol_dispatch import (
+    AllOf,
+    AnyOf,
+    At,
+    Func,
+    Str,
+    SymbolSpec,
+    Tup,
+    dispatch_symbols,
+)
 from aspen.utils.tree_sitter_utils import (
     Change,
     calc_edit_range,
@@ -37,6 +46,20 @@ enable_python()
 logger = get_logger(__name__)
 clingo_logger = get_clingo_logger(logger)
 ts_logger = get_ts_logger(logger)
+
+
+def _set_parser_logger(parser: ts.Parser) -> None:
+    """Set the logger of a tree-sitter parser before parsing.
+
+    tree-sitter calls the logger for every action of the parser, which
+    takes a significant share of the parsing time even if the messages
+    are discarded, so it is only set if they are logged.
+    """
+    if logger.isEnabledFor(logging.DEBUG):
+        parser.logger = ts_logger
+    else:
+        del parser.logger
+
 
 Id = int
 Bytes = tuple[int, int]
@@ -124,6 +147,8 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         self._node_id2source_path: dict[Symbol, Symbol] = {}
         self._pending_source_changes: dict[Symbol, list[Change]] = {}
         self._skip_final_re_reify = False
+        self._template_strs: list[str] = []
+        self._template_spec = self._build_template_spec()
 
     @property
     def facts(self) -> List[Symbol]:
@@ -149,29 +174,28 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
 
     def _path_symb2py(self, path_symb: Symbol) -> list[int]:
         """Convert path expression from symbolic to list form."""
-        l: list[int] = []
-        nil = Tuple_([])
-        while path_symb != nil:
-            if (
-                not path_symb.match("", 2)
-                or path_symb.arguments[0].type != SymbolType.Number
-            ):
-                raise ValueError(f"Malformed path symbol: {path_symb}.")
-            l.append(path_symb.arguments[0].number)
-            path_symb = path_symb.arguments[1]
-        return l
+        try:
+            indices = self._cons_list_symb2py(path_symb)
+        except ValueError as exc:
+            raise ValueError(f"Malformed path symbol: {path_symb}.") from exc
+        if any(idx.type != SymbolType.Number for idx in indices):
+            raise ValueError(f"Malformed path symbol: {path_symb}.")
+        return [idx.number for idx in indices]
 
     def _cons_list_symb2py(self, l: Symbol) -> list[Symbol]:
         """Convert symbolic cons list consisting of nested tuples into
         a python list of symbols."""
         l_py: list[Symbol] = []
-        nil = Tuple_([])
-        while l != nil:
-            if not l.match("", 2):
-                raise ValueError(f"Expected tuple of arity 2, found: {l}.")  # nocoverage
-            l_py.append(l.arguments[0])
-            l = l.arguments[1]
-        return l_py
+        while True:
+            # accessing the arguments of a symbol is costly
+            # (relatively speaking), so it is done once per element
+            args = l.arguments if l.type == SymbolType.Function else None
+            if args == [] and l.name == "":
+                return l_py
+            if args is None or len(args) != 2 or l.name != "":
+                raise ValueError(f"Expected tuple of arity 2, found: {l}.")
+            l_py.append(args[0])
+            l = args[1]
 
     def _node2path_symb(self, node: ts.Node) -> Symbol:
         """Given a tree-sitter node, calculate the corresponding path symbol."""
@@ -228,7 +252,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         if language is None:
             raise ValueError("No language specified, and no default language is set.")
         encoding = encoding if encoding is not None else self.default_encoding
-        parser = ts.Parser(language, included_ranges=included_ranges, logger=ts_logger)
+        parser = ts.Parser(language, included_ranges=included_ranges)
         path: Optional[Path] = None
         if isinstance(source, bytes):
             source_bytes = source
@@ -257,6 +281,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 language.name,
                 encoding,
             )
+        _set_parser_logger(parser)
         tree = parser.parse(source_bytes, encoding=encoding)
         processed_source = Source(
             identifier, source_bytes, path, encoding, parser, tree, destination
@@ -703,14 +728,26 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         """Convert template symbol to python str."""
         if symb.type == SymbolType.String:
             return symb.string
+        # The actions of the template spec push the string of the
+        # matched symbol to the stack (after converting its inserts
+        # recursively, which push and pop their own strings).
+        num_results = len(self._template_strs)
+        dispatch_symbols([symb], self._template_spec)
+        if len(self._template_strs) == num_results:
+            raise ValueError(f"Symbol {symb} could not be converted to string.")
+        return self._template_strs.pop()
 
-        result: list[str] = []
+    def _build_template_spec(self) -> SymbolSpec:
+        """Build the spec dispatching template symbols to the actions
+        converting them to strings, see _template_symb2str."""
 
         def _node(symb: Symbol) -> None:
             try:
                 source, node = self._source_path_symb2ts(self._node_id2source_path[symb])
                 start, end = node.start_byte, node.end_byte
-                result.append(source.source_bytes[start:end].decode(source.encoding))
+                self._template_strs.append(
+                    source.source_bytes[start:end].decode(source.encoding)
+                )
             # if the tuple is not a node id
             except ValueError as exc:  # nocoverage
                 raise ValueError(
@@ -721,13 +758,13 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             format_string = symb.arguments[0].string
             inserts = self._cons_list_symb2py(symb.arguments[1])
             insert_strs = [self._template_symb2str(s) for s in inserts]
-            result.append(format_string.format(*insert_strs))
+            self._template_strs.append(format_string.format(*insert_strs))
 
         def _join(symb: Symbol) -> None:
             join_str = symb.arguments[0].string
             inserts = self._cons_list_symb2py(symb.arguments[1])
             insert_strs = [self._template_symb2str(s) for s in inserts]
-            result.append(join_str.join(insert_strs))
+            self._template_strs.append(join_str.join(insert_strs))
 
         def _syntax_error(symb: Symbol) -> None:
             try:
@@ -740,7 +777,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 ) from exc
             language = source.parser.language
             assert language is not None
-            result.append(
+            self._template_strs.append(
                 format_syntax_error(
                     node,
                     source.source_bytes,
@@ -750,40 +787,34 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 )
             )
 
-        dispatch_symbols(
-            [symb],
-            AnyOf(
-                [
-                    Func("node", 1, action=_node),
-                    Func(
-                        "format",
-                        2,
-                        action=_format,
-                        shape=AllOf([At(0, Str()), At(1, Tup(2))]),
+        return AnyOf(
+            [
+                Func("node", 1, action=_node),
+                Func(
+                    "format",
+                    2,
+                    action=_format,
+                    shape=AllOf([At(0, Str()), At(1, Tup(2))]),
+                ),
+                Func(
+                    "join",
+                    2,
+                    action=_join,
+                    shape=AllOf(
+                        [
+                            At(0, Str()),
+                            AnyOf([At(1, Tup(2)), At(1, Tup(0))]),
+                        ]
                     ),
-                    Func(
-                        "join",
-                        2,
-                        action=_join,
-                        shape=AllOf(
-                            [
-                                At(0, Str()),
-                                AnyOf([At(1, Tup(2)), At(1, Tup(0))]),
-                            ]
-                        ),
-                    ),
-                    Func(
-                        "syntax_error",
-                        1,
-                        action=_syntax_error,
-                        shape=At(0, Func(name="node", arity=1)),
-                    ),
-                ]
-            ),
+                ),
+                Func(
+                    "syntax_error",
+                    1,
+                    action=_syntax_error,
+                    shape=At(0, Func(name="node", arity=1)),
+                ),
+            ]
         )
-        if not result:
-            raise ValueError(f"Symbol {symb} could not be converted to string.")
-        return result[0]
 
     def _topological_sort_edits(
         self, edit_symbols: Sequence[Symbol], deps: dict[Symbol, List[Symbol]]
@@ -895,6 +926,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 raise ValueError(f"Unknown source symbol: {source_symb}.") from exc
             logger.info("Reparsing source %s after edit.", source_symb)
             old_tree = source.tree
+            _set_parser_logger(source.parser)
             new_tree = source.parser.parse(
                 source.source_bytes, old_tree, encoding=source.encoding
             )
@@ -1031,16 +1063,21 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
 
         """
         facts: list[Symbol] = []
+        # The siblings are consecutive children of the same parent, so
+        # the index of the first one is enough to know those of all.
+        parent_node = siblings[0].parent if siblings else None
+        first_index = 0
+        if parent is not None and parent_node is not None:
+            first_index = parent_node.children.index(siblings[0])
         for idx, node in enumerate(siblings):
             subtree_facts = self._reify_ts_subtree(node, source)
             node_id = subtree_facts[0].arguments[0]
             facts.extend(subtree_facts)
             if prev_sibling is not None:
                 facts.append(Function("next_sibling", [prev_sibling, node_id]))
-            if parent is not None and node.parent is not None:
+            if parent is not None and parent_node is not None:
                 facts.append(Function("child", [parent, node_id]))
-                child_index = node.parent.children.index(node)
-                field_name = node.parent.field_name_for_child(child_index)
+                field_name = parent_node.field_name_for_child(first_index + idx)
                 if field_name is not None:
                     facts.append(Function("field", [node_id, String(field_name)]))
             if idx == len(siblings) - 1:

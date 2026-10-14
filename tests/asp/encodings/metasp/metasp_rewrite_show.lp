@@ -40,7 +40,7 @@ signature_sign(S,node(Sign)) :-
 signature_sign(S,"") :-
   extended_signature(S),
   #false: child(S,Sign),
-  	  field_name(Sign, "sign"),
+  	  field(Sign, "sign"),
 	  type(Sign, "classical_negation").
 
 signature_arity(S,Arity) :-
