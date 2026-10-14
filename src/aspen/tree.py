@@ -7,7 +7,7 @@ from graphlib import CycleError, TopologicalSorter
 from io import TextIOBase
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Callable, Generator, List, Literal, Optional, Sequence
+from typing import Generator, List, Literal, Optional, Sequence
 
 import tree_sitter as ts
 from clingo.control import Control
@@ -870,12 +870,10 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         """Re-reify subtrees who's syntactic structure changed due to
         edit, and delete outdated facts from before edit.
 
-        Reuses control - the caller's already-instantiated,
-        already-solved-once Control, which already has self.facts
-        grounded into it - rather than creating a separate one and
-        re-adding those facts to it. Grounding more onto it here is
-        only safe once the caller is done solving with it; it can't be
-        done reentrantly from within an on_model callback.
+        The re-reification queries are grounded in their own program
+        part in the Control of the transformation, which still
+        contains self.facts as they were before the edit, avoiding
+        adding them to a fresh Control again.
 
         """
         query2new_siblings: dict[Symbol, list[ts.Node]] = {}
@@ -897,74 +895,29 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                         [source_symb, Function("append_to_source", [])],
                     )
                 query2new_siblings[query] = new_siblings
-        encodings = [generic_util_path / "queries" / "re_reify_siblings.lp"]
-        for encoding in encodings:
-            control.load(str(encoding))
+        control.load(str(encoding_path / "transform" / "re_reify.lp"))
         with control.backend() as backend:
             for query in query2new_siblings:
-                query = Function("aspen", [Function("query", [query])])
-                atom = backend.add_atom(query)
+                atom = backend.add_atom(Function("_aspen_re_reify_query", [query]))
                 backend.add_rule([atom])
-        control.ground(parts=[base_program])
+        control.ground(parts=[("aspen_re_reify", ())])
+        # The re-reification encoding is stratified, so its results are
+        # facts after grounding, and can be read off the symbolic atoms
+        # without solving the transformation program again.
+        symbolic_atoms = control.symbolic_atoms
+        for atom in symbolic_atoms.by_signature("_aspen_re_reify_error", 2):  # nocoverage
+            msg, query = atom.symbol.arguments
+            raise RuntimeError(f"Re-reification query {query} failed: {msg.string}.")
         delete_facts: set[Symbol] = set()
         query2_related_dict: defaultdict[Symbol, dict[str, Symbol]] = defaultdict(dict)
-
-        def _on_re_reify_model(model: Model) -> Literal[False]:
-            if logger.isEnabledFor(logging.DEBUG):  # nocoverage
-                logger.debug(
-                    ("Found stable model with shown atoms: %s"),
-                    " ".join([str(s) + "." for s in model.symbols(shown=True)]),
-                )
-
-            def _process_return(symb: Symbol) -> None:
-                query, ret_value = symb.arguments
-
-                def _record_related(rel_name: str) -> Callable[[Symbol], None]:
-                    def _record(rv: Symbol) -> None:
-                        query2_related_dict[query][rel_name] = rv.arguments[0]
-
-                    return _record
-
-                dispatch_symbols(
-                    [ret_value],
-                    AnyOf(
-                        [
-                            Func(
-                                "delete",
-                                1,
-                                action=lambda rv: delete_facts.add(rv.arguments[0]),
-                            ),
-                            Func("parent", 1, action=_record_related("parent")),
-                            Func(
-                                "prev_sibling", 1, action=_record_related("prev_sibling")
-                            ),
-                            Func(
-                                "next_sibling", 1, action=_record_related("next_sibling")
-                            ),
-                        ]
-                    ),
-                )
-
-            dispatch_symbols(
-                model.symbols(terms=True),
-                Func(
-                    "aspen",
-                    1,
-                    shape=At(
-                        0,
-                        Func(
-                            "return",
-                            2,
-                            action=_process_return,
-                            shape=At(0, Func(name="re_reify_siblings")),
-                        ),
-                    ),
-                ),
-            )
-            return False
-
-        control.assign_external(Function("re_reify", []), True)
-        control.solve(on_model=_on_re_reify_model)
+        for atom in symbolic_atoms.by_signature("_aspen_re_reify_return", 2):
+            query, ret_value = atom.symbol.arguments
+            name = ret_value.name
+            (arg,) = ret_value.arguments
+            if name == "delete":
+                delete_facts.add(arg)
+            else:
+                query2_related_dict[query][name] = arg
         for query, siblings in query2new_siblings.items():
             kwargs = query2_related_dict[query]
             logger.debug(

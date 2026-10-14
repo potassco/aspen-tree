@@ -137,6 +137,19 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             expected_sources=["a(X) :- b(X)."],
         )
 
+    def test_transform_add_vars_include_generic(self) -> None:
+        """Test that re-reification after a transformation is not
+        affected by the transformation encoding including the generic
+        utility encodings."""
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["a :- b."],
+            meta_files=[encoding_dir / "add_var.lp"],
+            meta_string='#include "@aspen/generic/all.lp".',
+            initial_program=("add_var_to_atoms", [String("X")]),
+            expected_sources=["a(X) :- b(X)."],
+        )
+
     def test_transform_add_vars_append(self) -> None:
         """Test transformation, adding variables to atoms, using append."""
         self.assert_transform_isomorphic(

@@ -1,4 +1,3 @@
-#include "@aspen/generic/queries/descendant.lp".
 #include "@aspen/generic/queries/path_of_node.lp".
 
 #script (python)
@@ -30,9 +29,6 @@ aspen(item_in_template(Template, First)) :-
 aspen(item_in_template(Template, Template)) :-
   aspen(replace(Node, Template);append(Node, Template);prepend(Node, Template)).
 
-aspen(query(descendant(N))) :-
-  aspen(replace(_,S);append(_,S);prepend(_,S)), aspen(node_in_template(S,node(N))).
-
 aspen(target(replace(N,S),N)) :- aspen(replace(N,S)).
 
 % aspen(comes_before(Edit',Edit)) means Edit' must occur before Edit
@@ -47,9 +43,12 @@ aspen(_edit_insert(append(N, S), InsertNode)) :-
 aspen(_edit_insert(prepend(N, S), InsertNode)) :-
   aspen(prepend(N, S)), aspen(node_in_template(S, node(InsertNode))).
 
+aspen(_insert_desc(InsertNode, InsertNode)) :- aspen(_edit_insert(_, InsertNode)).
+aspen(_insert_desc(InsertNode, Node')) :-
+  aspen(_insert_desc(InsertNode, Node)), child(Node, Node').
+
 aspen(_edit_insert_desc(Edit, Node)) :-
-  aspen(_edit_insert(Edit, InsertNode)),
-  aspen(return(query(descendant(InsertNode)), Node)).
+  aspen(_edit_insert(Edit, InsertNode)), aspen(_insert_desc(InsertNode, Node)).
 
 aspen(comes_before(replace(node(TargetNode), S'), Edit)) :-
   aspen(_edit_insert_desc(Edit, TargetNode)),

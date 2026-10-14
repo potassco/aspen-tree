@@ -147,7 +147,7 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
                 ),
             ],
             expected_final_bytes=b"a(1). z :- x.",
-            expected_change_descriptors=[(([1, 1], 3), ([1, 1], 3))],
+            expected_change_descriptors=[(([1, 2, 0], 3), ([1, 2, 0], 1))],
         )
 
     def test_changes_range_edit2(self) -> None:
@@ -168,7 +168,10 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
                 )
             ],
             expected_final_bytes=b"a(3;1,2;4). z; g :- c, x.",
-            expected_change_descriptors=[(([0], 2), ([0], 2))],
+            expected_change_descriptors=[
+                (([0, 0], 2), ([0, 0], 2)),
+                (([1, 0], 1), ([1, 0], 1)),
+            ],
         )
 
     def test_changes_range_edit3(self) -> None:
@@ -189,7 +192,7 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
                 )
             ],
             expected_final_bytes=b"a(1). z .",
-            expected_change_descriptors=[(([1, 0], 4), ([1, 0], 2))],
+            expected_change_descriptors=[(([1, 1], 3), ([1, 1], 1))],
         )
 
     def test_changes_multiple_range_edit_overlap(self) -> None:
@@ -221,7 +224,12 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
                 ),
             ],
             expected_final_bytes=b"a :- n. n :- y, m. m :- s. unchanged.",
-            expected_change_descriptors=[(([0], 3), ([0], 3))],
+            expected_change_descriptors=[
+                (([0, 2], 2), ([0, 2], 2)),
+                (([1, 0, 0, 0], 1), ([1, 0, 0, 0], 1)),
+                (([1, 2], 2), ([1, 2], 2)),
+                (([2, 0, 0, 0], 1), ([2, 0, 0, 0], 1)),
+            ],
         )
 
     def test_changes_node_append1(self) -> None:
@@ -239,7 +247,7 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
             input_bytes=b"a(1). z :- x",
             edits=[([0, 0, 0, 2], "append", b"1, 2; 3, 4")],
             expected_final_bytes=b"a(11, 2; 3, 4). z :- x",
-            expected_change_descriptors=[(([0], 2), ([0], 2))],
+            expected_change_descriptors=[(([0, 0, 0, 2], 1), ([0, 0, 0, 2], 3))],
         )
 
     def test_changes_node_append3(self) -> None:
@@ -248,7 +256,7 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
             input_bytes=b"a(1). z :- x",
             edits=[([0, 0, 0], "append", b"; b. p")],
             expected_final_bytes=b"a(1); b. p. z :- x",
-            expected_change_descriptors=[(([0], 2), ([0], 3))],
+            expected_change_descriptors=[(([0], 1), ([0], 2))],
         )
 
     def test_changes_node_append4(self) -> None:
@@ -257,7 +265,7 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
             input_bytes=b"a(1). z :- x",
             edits=[([0, 0, 0, 2], "append", b",2")],
             expected_final_bytes=b"a(1,2). z :- x",
-            expected_change_descriptors=[(([0], 2), ([0], 2))],
+            expected_change_descriptors=[(([0, 0, 0, 2, 0], 1), ([0, 0, 0, 2, 0], 3))],
         )
 
     def test_changes_node_prepend1(self) -> None:
@@ -275,7 +283,7 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
             input_bytes=b"a(1). z :- x",
             edits=[([0, 0, 0, 2], "prepend", b"9")],
             expected_final_bytes=b"a(91). z :- x",
-            expected_change_descriptors=[(([0], 2), ([0], 2))],
+            expected_change_descriptors=[(([0, 0, 0, 1], 2), ([0, 0, 0, 1], 2))],
         )
 
     def test_changes_node_prepend3(self) -> None:
@@ -284,7 +292,7 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
             input_bytes=b"a(1). z :- x",
             edits=[([0, 0, 0], "prepend", b"b. p ")],
             expected_final_bytes=b"b. p a(1). z :- x",
-            expected_change_descriptors=[(([0], 2), ([0], 4))],
+            expected_change_descriptors=[(([0], 1), ([0], 3))],
         )
 
     def test_changes_node_prepend4(self) -> None:
@@ -293,7 +301,7 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
             input_bytes=b"a(1). z :- x",
             edits=[([0, 0, 0, 2], "prepend", b"2,")],
             expected_final_bytes=b"a(2,1). z :- x",
-            expected_change_descriptors=[(([0], 2), ([0], 2))],
+            expected_change_descriptors=[(([0, 0, 0, 1], 2), ([0, 0, 0, 1], 2))],
         )
 
     def test_changes_node_edit1(self) -> None:
@@ -302,7 +310,7 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
             input_bytes=b"a :- b. z :- x. a.",
             edits=[([1], "edit", b"z :- x. as :- sd.")],
             expected_final_bytes=b"a :- b. z :- x. as :- sd. a.",
-            expected_change_descriptors=[(([0], 2), ([0], 3))],
+            expected_change_descriptors=[(([1], 1), ([1], 2))],
         )
 
     def test_changes_node_edit2(self) -> None:
@@ -311,7 +319,7 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
             input_bytes=b"aast :- bdsrr. z :- x. a. c.",
             edits=[([1], "edit", b"")],
             expected_final_bytes=b"aast :- bdsrr.  a. c.",
-            expected_change_descriptors=[(([0], 3), ([0], 2))],
+            expected_change_descriptors=[(([1], 2), ([1], 1))],
         )
 
     def test_changes_node_edit3(self) -> None:
@@ -320,7 +328,7 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
             input_bytes=b"aast :- bdsrr. z :- x. a. b.",
             edits=[([1], "edit", b""), ([3], "edit", b"")],
             expected_final_bytes=b"aast :- bdsrr.  a. ",
-            expected_change_descriptors=[(([0], 4), ([0], 2))],
+            expected_change_descriptors=[(([1], 3), ([1], 1))],
         )
 
     def test_changes_node_edit4(self) -> None:

@@ -8,10 +8,17 @@ aspen(node_on_path((Source, Path), RootId, Path)) :-
 aspen(exception(format("Source {} not found.", (Source, ())))) :-
   aspen(query(node_at_path(Source, Path))), not source_root(Source, _).
 
+% Children by index of the nodes on paths, so that each step along a
+% path is a lookup instead of an enumeration of all children of a node
+% (for each query passing through it).
+aspen(_on_path(NodeId)) :- aspen(node_on_path(_, NodeId, _)).
+aspen(_child_at(NodeId, Idx, ChildId)) :-
+  aspen(_on_path(NodeId)), child(NodeId, ChildId), child_index(ChildId, Idx).
+
 % Recursive step, following the path down the tree.
 aspen(node_on_path(Query, ChildId, Path)) :-
   aspen(node_on_path(Query, NodeId, (Idx, Path))),
-  child(NodeId, ChildId), child_index(ChildId, Idx).
+  aspen(_child_at(NodeId, Idx, ChildId)).
 
 % Raise error if we cannot follow path all the way to a node
 aspen(log(NodeId,
@@ -19,7 +26,7 @@ aspen(log(NodeId,
 	  format("No node found at path: {}; path broken at node in range with remainder: {}.",
 	  (Query, ((Idx, Path), ()))))) :-
   aspen(node_on_path(Query, NodeId, (Idx, Path))),
-  #false : child(NodeId, ChildId), child_index(ChildId, Idx).
+  #false : aspen(_child_at(NodeId, Idx, _)).
 
 % If we have exhausted the path, we return the current node as answer to the query.
 aspen(return(node_at_path(Source, QueryPath), NodeId)) :-

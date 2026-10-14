@@ -214,22 +214,111 @@ def _find_reused_children(
     return matches
 
 
-def _narrow_change(
-    old_siblings: list[ts.Node], new_siblings: list[ts.Node]
+def _reified_attrs(node: ts.Node) -> tuple[object, ...]:
+    """The attributes of a node that determine its reification, along
+    with its position."""
+    return (
+        node.start_byte,
+        node.end_byte,
+        node.type,
+        node.is_named,
+        node.is_error,
+        node.is_missing,
+        node.is_extra,
+        [node.field_name_for_child(idx) for idx in range(node.child_count)],
+    )
+
+
+def _same_reification(old: ts.Node, new: ts.Node) -> bool:
+    """Whether the subtrees rooted at old and new are reified into the
+    same facts, up to node identifiers: they agree on the types, flags
+    and leaf texts of their nodes, and on the field names of their
+    children. The field names of old and new themselves are not
+    compared.
+
+    The texts of nodes of the old tree are no longer available after it
+    has been edited. Instead, editing marks the old nodes affected by
+    the edit as changed, and shifts the positions of all other old
+    nodes to their positions in the edited text. Hence, the subtree of
+    old has the same leaf texts as that of new if old is unchanged and
+    its nodes span the same bytes as those of new; otherwise they are
+    considered different."""
+    if old.has_changes:
+        return False
+    stack = [(old, new)]
+    while stack:
+        o, n = stack.pop()
+        if _reified_attrs(o) != _reified_attrs(n):
+            return False
+        stack.extend(zip(o.children, n.children))
+    return True
+
+
+def _refine_change(
+    *,
+    old_parent: ts.Node,
+    old_start: int,
+    old_siblings: list[ts.Node],
+    new_parent: ts.Node,
+    new_start: int,
+    new_siblings: list[ts.Node],
 ) -> list[Change]:
-    """A change consisting of a single old and a single new node of the
-    same grammar type can be described equally well, and more precisely,
-    as a change to that node's children. Descend in that case; otherwise
-    the change cannot be narrowed further."""
-    if (
-        len(old_siblings) == 1
-        and len(new_siblings) == 1
-        and old_siblings[0].child_count > 0
-        and new_siblings[0].child_count > 0
-        and old_siblings[0].type == new_siblings[0].type
+    """Refine the change of old_siblings into new_siblings, which start
+    at the given child indices of their parents.
+
+    Tree-sitter does not reuse every unaffected node across a re-parse,
+    so a change may contain siblings whose subtrees are unchanged.
+    These are trimmed from both ends of the change, keeping at least
+    one pair of siblings to anchor the change if the numbers of old and
+    new siblings differ. If the remaining old and new siblings
+    correspond one to one by type, the change is split into a change
+    per pair of changed siblings, narrowed to their children.
+    As changes are applied independently of each other, this is only
+    done for consecutive changed pairs that can all be narrowed, so
+    that no two changes are adjacent; otherwise these pairs remain a
+    single change."""
+
+    def same(old_idx: int, new_idx: int) -> bool:
+        return old_parent.field_name_for_child(
+            old_start + old_idx
+        ) == new_parent.field_name_for_child(new_start + new_idx) and _same_reification(
+            old_siblings[old_idx], new_siblings[new_idx]
+        )
+
+    num_old, num_new = len(old_siblings), len(new_siblings)
+    max_trim = min(num_old, num_new) - (num_old != num_new)
+    prefix = 0
+    while prefix < max_trim and same(prefix, prefix):
+        prefix += 1
+    suffix = 0
+    while prefix + suffix < max_trim and same(num_old - suffix - 1, num_new - suffix - 1):
+        suffix += 1
+    old_siblings = old_siblings[prefix : num_old - suffix]
+    new_siblings = new_siblings[prefix : num_new - suffix]
+    old_start += prefix
+    new_start += prefix
+    if len(old_siblings) != len(new_siblings) or any(
+        o.type != n.type for o, n in zip(old_siblings, new_siblings)
     ):
-        return _diff_children(old_siblings[0], new_siblings[0])
-    return [(old_siblings, new_siblings)]
+        return [(old_siblings, new_siblings)]
+    changes: list[Change] = []
+    run: list[int] = []
+    for idx in range(len(old_siblings) + 1):
+        if idx < len(old_siblings) and not same(idx, idx):
+            run.append(idx)
+            continue
+        if all(
+            old_siblings[i].child_count > 0 and new_siblings[i].child_count > 0
+            for i in run
+        ):
+            for i in run:
+                changes.extend(_diff_children(old_siblings[i], new_siblings[i]))
+        else:
+            changes.append(
+                ([old_siblings[i] for i in run], [new_siblings[i] for i in run])
+            )
+        run = []
+    return changes
 
 
 def _diff_children(
@@ -260,6 +349,7 @@ def _diff_children(
     for old_idx, new_idx in reused:
         old_gap = old_children[old_pos:old_idx]
         new_gap = new_children[new_pos:new_idx]
+        old_start, new_start = old_pos, new_pos
         last_fold_was_used = False
         if not old_gap and new_gap:  # nocoverage
             # pure insertion right before this reused node: fold the
@@ -271,13 +361,24 @@ def _diff_children(
             # now to be defensive
             old_gap = [old_children[old_idx]]
             new_gap = new_gap + [new_children[new_idx]]
+            old_start = old_idx
             last_fold_was_used = True
         if old_gap or new_gap:
-            changes.extend(_narrow_change(old_gap, new_gap))
+            changes.extend(
+                _refine_change(
+                    old_parent=old_node,
+                    old_start=old_start,
+                    old_siblings=old_gap,
+                    new_parent=new_node,
+                    new_start=new_start,
+                    new_siblings=new_gap,
+                )
+            )
         old_pos, new_pos = old_idx + 1, new_idx + 1
     # gap after the last reused node
     old_gap = old_children[old_pos:]
     new_gap = new_children[new_pos:]
+    old_start, new_start = old_pos, new_pos
     if not old_gap and new_gap and not top_level:
         # trailing pure insertion with no root to fall back on: anchor
         # it to the last reused node, which is the only one left that
@@ -291,10 +392,20 @@ def _diff_children(
             last_reused_old, last_reused_new = reused[-1]
             old_gap = [old_children[last_reused_old]]
             new_gap = [new_children[last_reused_new]] + new_gap
+            old_start, new_start = last_reused_old, last_reused_new
         # else: old_node had no children of its own to anchor to; only
         # reachable when old_node is the (possibly empty) tree root
     if old_gap or new_gap:
-        changes.extend(_narrow_change(old_gap, new_gap))
+        changes.extend(
+            _refine_change(
+                old_parent=old_node,
+                old_start=old_start,
+                old_siblings=old_gap,
+                new_parent=new_node,
+                new_start=new_start,
+                new_siblings=new_gap,
+            )
+        )
     return changes
 
 

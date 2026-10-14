@@ -1,8 +1,6 @@
-#external re_reify.
 #show.
 #show aspen(X) :
   aspen(X),
-  not re_reify,
   X=(replace(N,T);
      append(N,T);
      prepend(N,T);

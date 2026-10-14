@@ -5,6 +5,7 @@
 #include "./metasp_rewrite_show.lp".
 #include "@aspen/clingo/derived_predicates/symbol_signature.lp".
 #include "@aspen/clingo/derived_predicates/named_child_index.lp".
+#include "@aspen/generic/queries/descendant.lp".
 
 #program metasp_preprocess.
 

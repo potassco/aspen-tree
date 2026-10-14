@@ -10,7 +10,13 @@ from clingo.solving import Model
 from clingo.symbol import Function, Symbol, parse_term
 from tree_sitter import Language
 
-from aspen.tree import AspenTree, SourceInput, TransformError
+from aspen.tree import (
+    AspenTree,
+    SourceInput,
+    TransformError,
+    generic_util_path,
+    id_counter,
+)
 from aspen.utils.log import TestCaseWithRedirectedLogs
 
 aspen_tree_logger = logging.getLogger("aspen.tree")
@@ -79,46 +85,46 @@ class AspenTestCase(TestCaseWithRedirectedLogs):
         ):
             self.assertEqual(source_str, expected_source_str)
         # don't clutter logs generated during testing
-        # lvl = aspen_tree_logger.level
-        # aspen_tree_logger.setLevel(logging.ERROR)
-        # tree2 = AspenTree(
-        #     default_language=language, id_generator=id_counter(start=-1, step=-1)
-        # )
-        # expected_source_symbols = [tree2.parse(e) for e in expected_sources]
-        # query_symbols = [
-        #     Function("isomorphic", [s, e])
-        #     for s, e in zip(source_symbs, expected_source_symbols)
-        # ]
-        # query_atoms = [Function("aspen", [Function("query", [q])]) for q in query_symbols]
-        # iso_query_path = generic_util_path / "queries" / "isomorphic.lp"
-        # control = Control()
-        # control.load(str(iso_query_path))
+        lvl = aspen_tree_logger.level
+        aspen_tree_logger.setLevel(logging.ERROR)
+        tree2 = AspenTree(
+            default_language=language, id_generator=id_counter(start=-1, step=-1)
+        )
+        expected_source_symbols = [tree2.parse(e) for e in expected_sources]
+        query_symbols = [
+            Function("isomorphic", [s, e])
+            for s, e in zip(source_symbs, expected_source_symbols)
+        ]
+        query_atoms = [Function("aspen", [Function("query", [q])]) for q in query_symbols]
+        iso_query_path = generic_util_path / "queries" / "isomorphic.lp"
+        control = Control()
+        control.load(str(iso_query_path))
 
-        # with control.backend() as backend:
-        #     facts = tree.facts + tree2.facts
-        #     for f in facts:
-        #         f_atom = backend.add_atom(f)
-        #         backend.add_rule([f_atom])
-        #     for q in query_atoms:
-        #         backend.add_rule([backend.add_atom(q)])
-        # control.ground()
-        # query_return_facts: set[Symbol] = set()
+        with control.backend() as backend:
+            facts = tree.facts + tree2.facts
+            for f in facts:
+                f_atom = backend.add_atom(f)
+                backend.add_rule([f_atom])
+            for q in query_atoms:
+                backend.add_rule([backend.add_atom(q)])
+        control.ground()
+        query_return_facts: set[Symbol] = set()
 
-        # def on_iso_model(model: Model) -> Literal[False]:
-        #     for symb in model.symbols(shown=True):
-        #         if (
-        #             symb.match("aspen", 1)
-        #             and symb.arguments[0].match("return", 2)
-        #             and symb.arguments[0].arguments[0] in query_symbols
-        #         ):
-        #             query_return_facts.add(symb.arguments[0].arguments[1])
-        #     return False
+        def on_iso_model(model: Model) -> Literal[False]:
+            for symb in model.symbols(shown=True):
+                if (
+                    symb.match("aspen", 1)
+                    and symb.arguments[0].match("return", 2)
+                    and symb.arguments[0].arguments[0] in query_symbols
+                ):
+                    query_return_facts.add(symb.arguments[0].arguments[1])
+            return False
 
-        # control.solve(on_model=on_iso_model)
-        # aspen_tree_logger.setLevel(lvl)
-        # query_return_facts_str = {str(s) for s in query_return_facts}
-        # expected_return_facts_str: set[str] = set(str(q) for q in query_symbols)
-        # self.assertSetEqual(query_return_facts_str, expected_return_facts_str)
+        control.solve(on_model=on_iso_model)
+        aspen_tree_logger.setLevel(lvl)
+        query_return_facts_str = {str(s) for s in query_return_facts}
+        expected_return_facts_str: set[str] = set(str(q) for q in query_symbols)
+        self.assertSetEqual(query_return_facts_str, expected_return_facts_str)
 
     def assert_transform_logs(
         self,
