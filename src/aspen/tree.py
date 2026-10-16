@@ -2,12 +2,11 @@
 
 import logging
 from collections import defaultdict
-from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from io import TextIOBase
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Generator, List, Literal, Optional, Sequence
+from typing import Callable, Generator, List, Literal, Optional, Sequence
 
 import tree_sitter as ts
 from clingo.control import Control
@@ -16,18 +15,11 @@ from clingo.solving import Model
 from clingo.symbol import Function, Number, String, Symbol, SymbolType, Tuple_
 
 import aspen
+from aspen.messages import NodeFormatter, cons_list_symb2py
+from aspen.source import Source, StringEncoding, source_str
 from aspen.utils.include_resolver import resolve_meta_encoding_file, rewrite_includes
 from aspen.utils.log import get_clingo_logger, get_logger, get_ts_logger
-from aspen.utils.symbol_dispatch import (
-    AllOf,
-    AnyOf,
-    At,
-    Func,
-    Str,
-    SymbolSpec,
-    Tup,
-    dispatch_symbols,
-)
+from aspen.utils.symbol_dispatch import AnyOf, At, Func, dispatch_symbols
 from aspen.utils.tree_sitter_utils import (
     Change,
     calc_edit_range,
@@ -35,7 +27,6 @@ from aspen.utils.tree_sitter_utils import (
     calc_node_edit_range,
     calc_node_prepend_range,
     edit_tree,
-    format_node_span,
     format_syntax_error,
     get_path_of_node,
     get_tree_changes,
@@ -63,7 +54,6 @@ def _set_parser_logger(parser: ts.Parser) -> None:
 
 Id = int
 Bytes = tuple[int, int]
-StringEncoding = Literal["utf8", "utf16"]
 StringName = str
 RelatedNodes = tuple[
     Optional[Symbol],
@@ -100,19 +90,6 @@ def id_counter(start: int = 0, step: int = 1) -> Generator[Symbol, None, None]:
         n += step
 
 
-@dataclass
-class Source:
-    """Source processed by an AspenTree."""
-
-    id: Symbol
-    source_bytes: bytes
-    path: Optional[Path]
-    encoding: StringEncoding
-    parser: ts.Parser
-    tree: ts.Tree
-    destination: Optional[Path] = None
-
-
 class AspenTree:  # pylint: disable=too-many-instance-attributes
     """A tree that wraps a tree-sitter tree and it's representation as
     a set ASP facts.
@@ -147,8 +124,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         self._node_id2source_path: dict[Symbol, Symbol] = {}
         self._pending_source_changes: dict[Symbol, list[Change]] = {}
         self._skip_final_re_reify = False
-        self._template_strs: list[str] = []
-        self._template_spec = self._build_template_spec()
+        self._formatter = NodeFormatter(self._locate_node)
 
     @property
     def facts(self) -> List[Symbol]:
@@ -175,27 +151,12 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
     def _path_symb2py(self, path_symb: Symbol) -> list[int]:
         """Convert path expression from symbolic to list form."""
         try:
-            indices = self._cons_list_symb2py(path_symb)
+            indices = cons_list_symb2py(path_symb)
         except ValueError as exc:
             raise ValueError(f"Malformed path symbol: {path_symb}.") from exc
         if any(idx.type != SymbolType.Number for idx in indices):
             raise ValueError(f"Malformed path symbol: {path_symb}.")
         return [idx.number for idx in indices]
-
-    def _cons_list_symb2py(self, l: Symbol) -> list[Symbol]:
-        """Convert symbolic cons list consisting of nested tuples into
-        a python list of symbols."""
-        l_py: list[Symbol] = []
-        while True:
-            # accessing the arguments of a symbol is costly
-            # (relatively speaking), so it is done once per element
-            args = l.arguments if l.type == SymbolType.Function else None
-            if args == [] and l.name == "":
-                return l_py
-            if args is None or len(args) != 2 or l.name != "":
-                raise ValueError(f"Expected tuple of arity 2, found: {l}.")
-            l_py.append(args[0])
-            l = args[1]
 
     def _node2path_symb(self, node: ts.Node) -> Symbol:
         """Given a tree-sitter node, calculate the corresponding path symbol."""
@@ -230,6 +191,14 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 raise ValueError(f"No node found in tree at path: {path_symb}.") from exc
             node = tmp_node
         return source, node
+
+    def _locate_node(self, node_symb: Symbol) -> Optional[tuple[Source, ts.Node]]:
+        """Retrieve source and tree-sitter node of a node(Id) symbol,
+        or None if it is not the identifier of a node."""
+        source_path = self._node_id2source_path.get(node_symb)
+        if source_path is None:
+            return None
+        return self._source_path_symb2ts(source_path)
 
     def parse(
         self,
@@ -385,10 +354,10 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         syntax_error_nodes.sort(
             key=lambda node: (node.start_point.row, node.start_point.column)
         )
-        source_str = self._source_str(source)
+        source_name = source_str(source)
         messages = [
             format_syntax_error(
-                node, source.source_bytes, source.encoding, language, source_str
+                node, source.source_bytes, source.encoding, language, source_name
             )
             for node in syntax_error_nodes
         ]
@@ -566,24 +535,25 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         def _process_log_no_loc(symb: Symbol) -> None:
             logger.debug("Processing log symbol %s.", symb)
             log_level_symb, text_symb = symb.arguments
-            _emit_log(symb, log_level_symb, " ", self._template_symb2str(text_symb))
+            _emit_log(
+                symb, log_level_symb, " ", self._formatter.template_symb2str(text_symb)
+            )
 
         def _process_log_with_loc(symb: Symbol) -> None:
             logger.debug("Processing log symbol %s.", symb)
             node_symb, log_level_symb, text_symb = symb.arguments
-            source, node = self._source_path_symb2ts(self._node_id2source_path[node_symb])
-            loc_prefix = self._get_loc_prefix_from_source_node(source, node)
-            text = self._template_symb2str(text_symb)
-            span = format_node_span(node, source.source_bytes, source.encoding)
-            _emit_log(symb, log_level_symb, loc_prefix, f"{text}\n{span}")
+            text = self._formatter.template_symb2str(text_symb)
+            _emit_log(
+                symb, log_level_symb, "", self._formatter.node_message(node_symb, text)
+            )
 
         def _print_direct(symb: Symbol) -> None:
             logger.info("Processing print symbol %s.", symb)
-            print(self._template_symb2str(symb.arguments[0]))
+            print(self._formatter.template_symb2str(symb.arguments[0]))
 
         def _print_to_target(symb: Symbol) -> None:
             logger.info("Processing print symbol %s.", symb)
-            text = self._template_symb2str(symb.arguments[0])
+            text = self._formatter.template_symb2str(symb.arguments[0])
             textio_symb = symb.arguments[1]
             try:
                 source = self.sources[textio_symb]
@@ -622,16 +592,20 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
 
         def _process_exception_no_loc(symb: Symbol) -> None:
             logger.debug("Processing exception symbol %s.", symb)
-            error_msgs.append(self._template_symb2str(symb.arguments[0]))
+            error_msgs.append(self._formatter.template_symb2str(symb.arguments[0]))
 
         def _process_exception_with_loc(symb: Symbol) -> None:
             logger.debug("Processing exception symbol %s.", symb)
             node_symb, text_symb = symb.arguments
-            source, node = self._source_path_symb2ts(self._node_id2source_path[node_symb])
-            loc_prefix = self._get_loc_prefix_from_source_node(source, node)
-            text = self._template_symb2str(text_symb)
-            span = format_node_span(node, source.source_bytes, source.encoding)
-            error_msgs.append(f"{loc_prefix}{text}\n{span}")
+            text = self._formatter.template_symb2str(text_symb)
+            error_msgs.append(self._formatter.node_message(node_symb, text))
+
+        # Logs, prints and exceptions may refer to nodes, so they are
+        # processed (in order) after the paths of all nodes are recorded.
+        deferred: list[tuple[Callable[[Symbol], None], Symbol]] = []
+
+        def _defer(action: Callable[[Symbol], None]) -> Callable[[Symbol], None]:
+            return lambda symb: deferred.append((action, symb))
 
         spec = Func(
             "aspen",
@@ -645,12 +619,12 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                         Func("prepend", 2, action=edit_symbols.append),
                         Func("comes_before", 2, action=_record_comes_before),
                         Func("next_program", 2, action=next_transform_symbols.append),
-                        Func("log", 2, action=_process_log_no_loc),
-                        Func("log", 3, action=_process_log_with_loc),
-                        Func("print", 1, action=_print_direct),
-                        Func("print", 2, action=_print_to_target),
-                        Func("exception", 1, action=_process_exception_no_loc),
-                        Func("exception", 2, action=_process_exception_with_loc),
+                        Func("log", 2, action=_defer(_process_log_no_loc)),
+                        Func("log", 3, action=_defer(_process_log_with_loc)),
+                        Func("print", 1, action=_defer(_print_direct)),
+                        Func("print", 2, action=_defer(_print_to_target)),
+                        Func("exception", 1, action=_defer(_process_exception_no_loc)),
+                        Func("exception", 2, action=_defer(_process_exception_with_loc)),
                         Func(
                             "return",
                             2,
@@ -662,6 +636,8 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             ),
         )
         dispatch_symbols(model.symbols(terms=True), spec)
+        for action, symb in deferred:
+            action(symb)
         if len(next_transform_symbols) > 1:
             raise ValueError(
                 (
@@ -704,118 +680,6 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             self._pending_source_changes = self._reparse_sources(edited_sources)
         return False
 
-    def _source_str(self, source: Source) -> str:
-        """The identifier to show for a source in error/log messages:
-        its file path when read from one, or its source id otherwise
-        (e.g. for stdin, or any other in-memory source)."""
-        return str(source.path) if source.path is not None else str(source.id)
-
-    def _get_loc_prefix_from_source_node(self, source: Source, node: ts.Node) -> str:
-        """Given a symbolic tuple of a source and path, calculate the
-        node's location prefix string for error and log messages.
-
-        """
-        source_str = self._source_str(source)
-        start_p, end_p = node.start_point, node.end_point
-        if start_p.row == end_p.row:
-            span_str = f"{start_p.row + 1}:{start_p.column}-{end_p.column}"
-        else:
-            span_str = f"{start_p.row + 1}:{start_p.column}-{end_p.row}:{end_p.column}"
-        loc_prefix = f"{source_str}:{span_str}: "
-        return loc_prefix
-
-    def _template_symb2str(self, symb: Symbol) -> str:
-        """Convert template symbol to python str."""
-        if symb.type == SymbolType.String:
-            return symb.string
-        # The actions of the template spec push the string of the
-        # matched symbol to the stack (after converting its inserts
-        # recursively, which push and pop their own strings).
-        num_results = len(self._template_strs)
-        dispatch_symbols([symb], self._template_spec)
-        if len(self._template_strs) == num_results:
-            raise ValueError(f"Symbol {symb} could not be converted to string.")
-        return self._template_strs.pop()
-
-    def _build_template_spec(self) -> SymbolSpec:
-        """Build the spec dispatching template symbols to the actions
-        converting them to strings, see _template_symb2str."""
-
-        def _node(symb: Symbol) -> None:
-            try:
-                source, node = self._source_path_symb2ts(self._node_id2source_path[symb])
-                start, end = node.start_byte, node.end_byte
-                self._template_strs.append(
-                    source.source_bytes[start:end].decode(source.encoding)
-                )
-            # if the tuple is not a node id
-            except ValueError as exc:  # nocoverage
-                raise ValueError(
-                    f"Symbol {symb} could not be converted to string."
-                ) from exc
-
-        def _format(symb: Symbol) -> None:
-            format_string = symb.arguments[0].string
-            inserts = self._cons_list_symb2py(symb.arguments[1])
-            insert_strs = [self._template_symb2str(s) for s in inserts]
-            self._template_strs.append(format_string.format(*insert_strs))
-
-        def _join(symb: Symbol) -> None:
-            join_str = symb.arguments[0].string
-            inserts = self._cons_list_symb2py(symb.arguments[1])
-            insert_strs = [self._template_symb2str(s) for s in inserts]
-            self._template_strs.append(join_str.join(insert_strs))
-
-        def _syntax_error(symb: Symbol) -> None:
-            try:
-                source, node = self._source_path_symb2ts(
-                    self._node_id2source_path[symb.arguments[0]]
-                )
-            except ValueError as exc:  # nocoverage
-                raise ValueError(
-                    f"Symbol {symb} could not be converted to string."
-                ) from exc
-            language = source.parser.language
-            assert language is not None
-            self._template_strs.append(
-                format_syntax_error(
-                    node,
-                    source.source_bytes,
-                    source.encoding,
-                    language,
-                    self._source_str(source),
-                )
-            )
-
-        return AnyOf(
-            [
-                Func("node", 1, action=_node),
-                Func(
-                    "format",
-                    2,
-                    action=_format,
-                    shape=AllOf([At(0, Str()), At(1, Tup(2))]),
-                ),
-                Func(
-                    "join",
-                    2,
-                    action=_join,
-                    shape=AllOf(
-                        [
-                            At(0, Str()),
-                            AnyOf([At(1, Tup(2)), At(1, Tup(0))]),
-                        ]
-                    ),
-                ),
-                Func(
-                    "syntax_error",
-                    1,
-                    action=_syntax_error,
-                    shape=At(0, Func(name="node", arity=1)),
-                ),
-            ]
-        )
-
     def _topological_sort_edits(
         self, edit_symbols: Sequence[Symbol], deps: dict[Symbol, List[Symbol]]
     ) -> Sequence[Symbol]:
@@ -825,18 +689,28 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
 
         """
         # TODO: check for duplicate append symbols as well.
-        seen = set()
-        dupes = {
-            f.arguments[0]
-            for f in edit_symbols
-            if f.arguments[0] in seen or seen.add(f.arguments[0])  # type: ignore
-        }
+        target2edits: defaultdict[Symbol, list[Symbol]] = defaultdict(list)
+        for edit in edit_symbols:
+            target2edits[edit.arguments[0]].append(edit)
+        dupes = sorted(
+            (target for target, edits in target2edits.items() if len(edits) > 1),
+            key=self._formatter.node_position,
+        )
         if len(dupes) > 0:
-            dupes_str = ",".join(str(d) for d in dupes)
-            raise ValueError(
-                "Multiple edits defined for following nodes; "
-                f"expected one each: {dupes_str}."
-            )
+            messages = [
+                self._formatter.node_message(
+                    target,
+                    "Multiple edits defined for node, expected one: "
+                    + "; ".join(
+                        sorted(
+                            self._formatter.describe_edit(e) for e in target2edits[target]
+                        )
+                    )
+                    + ".",
+                )
+                for target in dupes
+            ]
+            raise ValueError("\n".join(messages))
         for s in edit_symbols:
             if s not in deps.keys():
                 deps[s] = []
@@ -844,7 +718,13 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         try:
             edit_symbols = list(tsorter.static_order())
         except CycleError as exc:
-            cycle_str = " <-\n".join([str(symb) for symb in exc.args[1]])
+            # each edit of the cycle must be applied before the next one
+            cycle_str = "\nwhich must be applied before\n".join(
+                self._formatter.node_message(
+                    edit.arguments[0], self._formatter.describe_edit(edit)
+                )
+                for edit in exc.args[1]
+            )
             msg = (
                 "Transformation edits define cyclic dependencies via format strings. "
                 f"One such cycle:\n{cycle_str}"
@@ -872,10 +752,17 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         for symb in edit_symbols:
             logger.info("Processing edit symbol: %s.", symb)
             template_symb = symb.arguments[1]
-            target_source, target_node = self._source_path_symb2ts(
-                self._node_id2source_path[symb.arguments[0]]
-            )
-            insert_text = self._template_symb2str(template_symb)
+            try:
+                target_source, target_node = self._source_path_symb2ts(
+                    self._node_id2source_path[symb.arguments[0]]
+                )
+            except KeyError as e:
+                raise ValueError(
+                    f"Error processing edit symbol {symb}. "
+                    f"Symbol {symb.arguments[0]} is not a valid node symbol; "
+                    "perhaps you forgot to wrap it in node(...)?"
+                ) from e
+            insert_text = self._formatter.template_symb2str(template_symb)
             logger.debug("Evaluted template of edit symbol: '%s'", insert_text)
             insert_bytes = bytes(insert_text, target_source.encoding)
             if logger.isEnabledFor(logging.INFO):

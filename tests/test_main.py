@@ -198,3 +198,22 @@ class TestMain(TestCaseWithRedirectedLogs):
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn("error:", err_buf.getvalue())
         self.assertIn("tree_sitter_no_such_grammar", err_buf.getvalue())
+
+    def test_main_reports_traceback_on_debug(self) -> None:
+        """Test that with --log debug, an error raised by the
+        dispatched command is reported with its traceback."""
+        err_buf = StringIO()
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["aspen", "--log", "debug", "reify", "foo.lp", "-l", "no_such_grammar"],
+            ),
+            patch.object(sys, "stdout", StringIO()),
+            patch.object(sys, "stderr", err_buf),
+        ):
+            with self.assertRaises(SystemExit) as ctx:
+                main()
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("Traceback (most recent call last):", err_buf.getvalue())
+        self.assertIn("tree_sitter_no_such_grammar", err_buf.getvalue())

@@ -2,7 +2,9 @@
 The main entry point for the application.
 """
 
+import logging
 import sys
+import traceback
 
 from .cli import CLI_ERRORS
 from .utils.log import configure_logging
@@ -24,7 +26,10 @@ def main() -> None:
     try:
         args.func(args)
     except CLI_ERRORS as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        if args.log <= logging.DEBUG:
+            traceback.print_exc()
+        else:
+            print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
