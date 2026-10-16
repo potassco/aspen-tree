@@ -1,6 +1,6 @@
 aspen(exception(
   format("Expected input N to query delete_subtree(N) to be node id, found: {0}",
-         (N, ())))) :-
+         (@symbol_to_string(N), ())))) :-
   aspen(query(delete_subtree(N))), not node(N).
 
 aspen(delete_in_subtree(delete_subtree(N), node(N))) :-

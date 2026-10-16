@@ -8,6 +8,7 @@ from pathlib import Path
 # pylint: disable=import-error,no-name-in-module
 from clingo.symbol import Function, Number, String, parse_term
 
+from aspen.messages import cons_list_symb2py
 from aspen.tree import AspenTree, TransformError, generic_util_path
 from aspen.utils.testing import AspenTestCase
 from aspen.utils.tree_sitter_utils import get_node_at_path
@@ -35,20 +36,19 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
 
     def test_conslist2pylist(self) -> None:
         """Test conversion of symbolic cons list to python list"""
-        tree = AspenTree(default_language=clingo_lang)
         good_path = parse_term("(1, (2, ()))")
         self.assertListEqual(
-            tree._cons_list_symb2py(good_path),  # pylint: disable=protected-access
+            cons_list_symb2py(good_path),
             [Number(1), Number(2)],
         )
         inverted_path = parse_term("(((), 2), 1)")
         re_str = r"Expected tuple of arity 2"
         with self.assertRaisesRegex(ValueError, re_str):
-            tree._cons_list_symb2py(inverted_path)  # pylint: disable=protected-access
+            cons_list_symb2py(inverted_path)
         const_cons_list = parse_term("(a, (b, ()))")
         const_py_list = [Function("a", []), Function("b", [])]
         self.assertListEqual(
-            tree._cons_list_symb2py(const_cons_list),  # pylint: disable=protected-access
+            cons_list_symb2py(const_cons_list),
             const_py_list,
         )
 
@@ -187,9 +187,17 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             'aspen(replace(node(N),format(S,()))) :- source_root(_,N); S=("a.";"b.").'
         )
         regex_str = (
-            r"Multiple edits defined for following nodes;"
-            r" expected one each: node\(0\)."
+            r"^s\(0\):1:0-5: Multiple edits defined for node, expected one: "
+            r"replace with 'a\.'; replace with 'b\.'\.\np\(1\)\.\n\^\^\^\^\^$"
         )
+        with self.assertRaisesRegex(ValueError, regex_str):
+            tree.transform(meta_string=meta_str)
+        # edits of other kinds, and those with templates that cannot
+        # be converted to text, are described as well
+        meta_str = (
+            'aspen(replace(node(N),"a.");append(node(N),foo(1))) :- source_root(_,N).'
+        )
+        regex_str = r"expected one: append foo\(1\); replace with 'a\.'\."
         with self.assertRaisesRegex(ValueError, regex_str):
             tree.transform(meta_string=meta_str)
 
@@ -212,6 +220,91 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             meta_string='aspen(prepend(node(N), "x :- y. ")) :- leaf_text(N, "a").',
             expected_sources=["x :- y. a."],
         )
+
+    def test_transform_format_without_inserts(self) -> None:
+        """Test that a format template may have an empty list of
+        inserts."""
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["a."],
+            meta_string='aspen(replace(node(N),format("b",()))) :- leaf_text(N, "a").',
+            expected_sources=["b."],
+        )
+
+    def test_transform_exception_not_a_node(self) -> None:
+        """Test that an exception located at a symbol that is not a
+        node identifier is reported along with the symbol."""
+        self.assert_transform_raises(
+            message_regex=(
+                r"^node\(999\): bad\n"
+                r"Expected a node identifier as input for path_of_node query, "
+                r"found 999\.$"
+            ),
+            language=clingo_lang,
+            sources=["a."],
+            meta_string='aspen(exception(node(999), "bad")).',
+        )
+
+    def test_transform_template_not_a_node(self) -> None:
+        """Test that a template inserting a symbol that is not a node
+        identifier raises an error."""
+        tree = AspenTree(default_language=clingo_lang)
+        tree.parse("a.")
+        regex = r"Symbol node\(999\) could not be converted to string, as it is not"
+        with self.assertRaisesRegex(ValueError, regex):
+            tree.transform(meta_string='aspen(print(format("{}", (node(999), ())))).')
+
+    def test_query_node_at_path_broken_path(self) -> None:
+        """Test that the node_at_path query raises an error located at
+        the node where the path cannot be followed further."""
+        self.assert_transform_raises(
+            message_regex=(
+                r"^s\(0\):1:0-7: No node found at path \(0,\(5,\(\)\)\) of "
+                r"source s\(0\): this node has no child with index 5\.\n"
+                r"a :- b\.\n\^\^\^\^\^\^\^$"
+            ),
+            language=clingo_lang,
+            sources=["a :- b."],
+            meta_string=(
+                '#include "@aspen/generic/queries/node_at_path.lp".'
+                "aspen(query(node_at_path(s(0),(0,(5,())))))."
+            ),
+        )
+
+    def test_query_node_at_path_unknown_source(self) -> None:
+        """Test that the node_at_path query raises an error for an
+        unknown source."""
+        self.assert_transform_raises(
+            message_regex=r"^Source s\(7\) not found\.$",
+            language=clingo_lang,
+            sources=["a."],
+            meta_string=(
+                '#include "@aspen/generic/queries/node_at_path.lp".'
+                "aspen(query(node_at_path(s(7),(0,()))))."
+            ),
+        )
+
+    def test_queries_not_a_node(self) -> None:
+        """Test that queries expecting a node identifier raise an
+        error showing the given symbol otherwise."""
+        for query, message in (
+            ("descendant", r"^Expected node identifier, found f\(x\)\.$"),
+            (
+                "delete_subtree",
+                r"^Expected input N to query delete_subtree\(N\) to be node id, "
+                r"found: f\(x\)$",
+            ),
+        ):
+            with self.subTest(query=query):
+                self.assert_transform_raises(
+                    message_regex=message,
+                    language=clingo_lang,
+                    sources=["a."],
+                    meta_string=(
+                        f'#include "@aspen/generic/queries/{query}.lp".'
+                        f"aspen(query({query}(f(x))))."
+                    ),
+                )
 
     def test_transform_bad_replace(self) -> None:
         """Test that tranformation raises error when invalid
@@ -236,6 +329,11 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
         )
         error_regex = (
             r"Transformation edits define cyclic dependencies via format strings\. "
+            r"One such cycle:\n"
+            r"s\(0\):1:(0-1|5-6): replace with '[ab]'\na :- b\.\n *\^\n"
+            r"which must be applied before\n"
+            r"s\(0\):1:(0-1|5-6): replace with '[ab]'\na :- b\.\n *\^\n"
+            r"which must be applied before\n"
         )
         with self.assertRaisesRegex(ValueError, error_regex):
             tree.transform(meta_string=meta_str)
@@ -364,7 +462,7 @@ p(1
         """Test that tranformation logs messages as expected."""
         source_path = encoding_dir / "multiline.lp"
         loc_log_str = str(source_path).replace("\\", "\\\\")
-        loc_log_str += r":1:0-2:0: This is a log for a node"
+        loc_log_str += r":1:0-3:0: This is a log for a node"
         self.assert_transform_logs(
             log_level="INFO",
             message2num_matches={

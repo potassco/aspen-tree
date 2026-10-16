@@ -1,4 +1,4 @@
-aspen(exception(format("Expected node identifier, found {}.", (Node, ())))) :-
+aspen(exception(format("Expected node identifier, found {}.", (@symbol_to_string(Node), ())))) :-
   aspen(query(descendant(Node))), not node(Node).
 
 aspen(return(query(descendant(Node)), Node)) :-

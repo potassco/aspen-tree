@@ -4,7 +4,7 @@
 
 aspen(exception(format(
     "Expected a node identifier as input for path_of_node query, found {}.",
-    (Node, ())))) :-
+    (@symbol_to_string(Node), ())))) :-
   aspen(query(path_of_node(Node))), not node(Node).
 
 % base
