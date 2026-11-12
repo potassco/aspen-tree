@@ -7,9 +7,27 @@ import tree_sitter as ts
 from clingo.symbol import Symbol, SymbolType
 
 from aspen.source import Source, source_str
-from aspen.utils.tree_sitter_utils import format_node_span, format_syntax_error
+from aspen.utils.tree_sitter_utils import format_point_span, format_syntax_error
 
 NodeLocator = Callable[[Symbol], Optional[tuple[Source, ts.Node]]]
+
+# The kinds of edits, and those whose target may be a span.
+EDIT_KINDS = ("replace", "append", "prepend")
+SPAN_EDIT_KINDS = ("replace",)
+
+
+def is_span(symb: Symbol) -> bool:
+    """Whether symb is of the form span(node(N), node(M))."""
+    return (
+        symb.match("span", 2)
+        and symb.arguments[0].match("node", 1)
+        and symb.arguments[1].match("node", 1)
+    )
+
+
+def is_target(symb: Symbol) -> bool:
+    """Whether symb is of the form node(N) or span(node(N), node(M))."""
+    return symb.match("node", 1) or is_span(symb)
 
 
 def cons_list_symb2py(l: Symbol) -> list[Symbol]:
@@ -28,10 +46,9 @@ def cons_list_symb2py(l: Symbol) -> list[Symbol]:
         l = args[1]
 
 
-def loc_prefix(source: Source, node: ts.Node) -> str:
-    """The location prefix of a node of a source for error and log
-    messages."""
-    start_p, end_p = node.start_point, node.end_point
+def loc_prefix(source: Source, start_p: ts.Point, end_p: ts.Point) -> str:
+    """The location prefix of the part of a source between two points
+    for error and log messages."""
     if start_p.row == end_p.row:
         span_str = f"{start_p.row + 1}:{start_p.column}-{end_p.column}"
     else:
@@ -39,9 +56,20 @@ def loc_prefix(source: Source, node: ts.Node) -> str:
     return f"{source_str(source)}:{span_str}: "
 
 
-def _node_text(source: Source, node: ts.Node) -> str:
-    """The text of a node of a source."""
-    return source.source_bytes[node.start_byte : node.end_byte].decode(source.encoding)
+def _nodes_text(source: Source, nodes: list[ts.Node]) -> str:
+    """The text of a run of sibling nodes of a source."""
+    start, end = nodes[0].start_byte, nodes[-1].end_byte
+    return source.source_bytes[start:end].decode(source.encoding)
+
+
+def _depth_in(node: ts.Node, ancestors: list[ts.Node]) -> Optional[int]:
+    """The number of steps from node up to one of ancestors, or None
+    if there is none."""
+    for ancestor in ancestors:
+        depth = _depth_below(node, ancestor)
+        if depth is not None:
+            return depth
+    return None
 
 
 def _depth_below(node: ts.Node, ancestor: ts.Node) -> Optional[int]:
@@ -69,27 +97,74 @@ class NodeFormatter:
         self._locate_original_node = locate_original_node
 
     def node_message(self, node_symb: Symbol, text: str) -> str:
-        """Message about the node with the given node(Id) symbol,
-        consisting of its location in the source, the text, and the
-        part of the source spanned by the node. If the node is not
-        known (e.g. as the symbol is not the identifier of a node,
-        which is reported separately), the symbol is shown instead."""
-        located = self._locate_node(node_symb)
+        """Message about the node with the given node(Id) symbol (or
+        the nodes of a span(node(N), node(M)) symbol), consisting of
+        its location in the source, the text, and the part of the
+        source spanned by the node. If the node is not known (e.g. as
+        the symbol is not the identifier of a node, which is reported
+        separately), the symbol is shown instead."""
+        located = self._locate_ends(node_symb)
         if located is None:
             return f"{node_symb}: {text}"
-        source, node = located
-        span = format_node_span(node, source.source_bytes, source.encoding)
-        return f"{loc_prefix(source, node)}{text}\n{span}"
+        source, first, last = located
+        start, end = first.start_point, last.end_point
+        span = format_point_span(start, end, source.source_bytes, source.encoding)
+        return f"{loc_prefix(source, start, end)}{text}\n{span}"
 
     def node_position(self, node_symb: Symbol) -> tuple[str, int]:
-        """Key to sort node(Id) symbols by their position in the
-        sources."""
-        located = self._locate_node(node_symb)
+        """Key to sort node(Id) (and span) symbols by their position in
+        the sources."""
+        located = self._locate_ends(node_symb)
         # symbols that are not node identifiers are reported as
         # errors of the path_of_node query before this is reached
         assert located is not None
-        source, node = located
-        return str(source.id), node.start_byte
+        source, first, _ = located
+        return str(source.id), first.start_byte
+
+    def _locate_ends(
+        self, node_symb: Symbol
+    ) -> Optional[tuple[Source, ts.Node, ts.Node]]:
+        """The source, and first and last node of a node(Id) or span
+        symbol, or None if they are not known. The span is not
+        checked, so that this can be used to report invalid spans."""
+        first_symb, last_symb = (
+            node_symb.arguments if is_span(node_symb) else (node_symb, node_symb)
+        )
+        first = self._locate_node(first_symb)
+        last = self._locate_node(last_symb)
+        if first is None or last is None:
+            return None
+        return first[0], first[1], last[1]
+
+    def locate_target(
+        self, target_symb: Symbol, original: bool = False
+    ) -> tuple[Source, list[ts.Node]]:
+        """The source and nodes of a node(Id) symbol, or of a
+        span(node(N), node(M)) symbol, whose nodes are N and its next
+        siblings up to M. If original is set, they are located in the
+        sources as they were at the start of the transformation step.
+        Raises a ValueError if a node is not known, or M is not N or a
+        later sibling of it."""
+        locate_node = self._locate_original_node if original else self._locate_node
+        if not is_span(target_symb):
+            source, node = self._locate_template_node(target_symb, locate_node)
+            return source, [node]
+        first_symb, last_symb = target_symb.arguments
+        source, first = self._locate_template_node(first_symb, locate_node)
+        _, last = self._locate_template_node(last_symb, locate_node)
+        nodes = [first]
+        while nodes[-1] != last:
+            sibling = nodes[-1].next_sibling
+            if sibling is None:
+                raise ValueError(
+                    self.node_message(
+                        first_symb,
+                        f"Invalid span {target_symb}: {last_symb} is not "
+                        f"{first_symb} or a later sibling of it.",
+                    )
+                )
+            nodes.append(sibling)
+        return source, nodes
 
     def describe_edit(self, edit_symb: Symbol) -> str:
         """Describe an edit symbol by its kind and the text it inserts
@@ -111,16 +186,21 @@ class NodeFormatter:
           edits of it and its descendants applied so far (which the
           transformation encoding orders before the edit using the
           template);
-        - original(node(N)): the text of node N at the start of the
-          current transformation step, before any edits;
+        - span(node(N), node(M)): the current text from the start of
+          node N to the end of node M, which must be N or a later
+          sibling of N;
+        - original(node(N)), original(span(node(N), node(M))): the
+          text of node N (or the span) at the start of the current
+          transformation step, before any edits;
         - format(S, L) and join(S, L): the format string S with the
           templates of the list L inserted, or the templates of the
           list L joined by S;
-        - mutate(B, E): the text of B, which is node(N) or
-          original(node(N)), with the edits E applied, without
-          changing the source. E is an edit or a list of edits of
-          the form replace(node(M), T), append(node(M), T) or
-          prepend(node(M), T), where M is N or a descendant of N, see
+        - mutate(B, E): the text of B, which is node(N), a span, or
+          either of them wrapped in original(...), with the edits E
+          applied, without changing the source. E is an edit or a
+          list of edits of the form replace(T, S), append(node(M), S)
+          or prepend(node(M), S), where T is node(M) or a span, and
+          the nodes are in B or descendants of nodes in B, see
           _mutate_text;
         - syntax_error(node(N)): a description of the syntax error
           at node N.
@@ -133,12 +213,10 @@ class NodeFormatter:
             name = symb.name
             args = symb.arguments
             arity = len(args)
-            if arity == 1 and name == "node":
-                return _node_text(*self._locate_template_node(symb, self._locate_node))
-            if arity == 1 and name == "original" and args[0].match("node", 1):
-                return _node_text(
-                    *self._locate_template_node(args[0], self._locate_original_node)
-                )
+            if (arity == 1 and name == "node") or (arity == 2 and is_span(symb)):
+                return _nodes_text(*self.locate_target(symb))
+            if arity == 1 and name == "original" and is_target(args[0]):
+                return _nodes_text(*self.locate_target(args[0], original=True))
             if (
                 arity == 2
                 and name in ("format", "join")
@@ -168,26 +246,27 @@ class NodeFormatter:
     def _mutate_text(self, symb: Symbol, base: Symbol, edits_symb: Symbol) -> str:
         """Convert the template symbol mutate(base, edits_symb) to
         python str, by splicing the texts of the edits into the text
-        of the base node.
+        of the base node (or span).
 
         Like edits of the source, each node may have at most one edit
         of each kind, and the replacement of a node comes before the
-        text prepended and appended to it. A replaced node must not
-        contain the target of another edit, as the replacement would
-        overwrite its text.
+        text prepended and appended to it. A replaced node (or span)
+        must not contain the target of another edit, as the
+        replacement would overwrite its text, except that the first
+        node of a replaced span may be prepended to, and its last node
+        appended to.
         """
-        if base.match("node", 1):
-            node_symb, locate_node = base, self._locate_node
-        elif base.match("original", 1) and base.arguments[0].match("node", 1):
-            node_symb, locate_node = base.arguments[0], self._locate_original_node
-        else:
+        original = base.match("original", 1)
+        if original:
+            base = base.arguments[0]
+        if not is_target(base):
             raise ValueError(f"Symbol {symb} could not be converted to string.")
-        source, base_node = self._locate_template_node(node_symb, locate_node)
+        source, base_nodes = self.locate_target(base, original)
         if edits_symb.match("", 2) or edits_symb.match("", 0):
             edits = cons_list_symb2py(edits_symb)
         else:
             edits = [edits_symb]
-        targets = self._mutate_targets(symb, edits, node_symb, base_node, locate_node)
+        targets = self._mutate_targets(symb, edits, base, base_nodes, original)
         # The texts to splice in, as (start, end, key, text), sorted so
         # that at the same position, appends of nodes ending there come
         # first (inner ones first), then prepends of nodes starting
@@ -195,56 +274,61 @@ class NodeFormatter:
         # those of empty nodes come first.
         pieces: list[tuple[int, int, tuple[int, int], bytes]] = []
         for edit in edits:
-            target, depth = targets[(edit.arguments[0], edit.name)]
+            nodes, depth = targets[(edit.arguments[0], edit.name)]
+            start, end = nodes[0].start_byte, nodes[-1].end_byte
             text = bytes(self.template_symb2str(edit.arguments[1]), source.encoding)
             if edit.name == "append":
-                pieces.append((target.end_byte, target.end_byte, (0, -depth), text))
+                pieces.append((end, end, (0, -depth), text))
             elif edit.name == "prepend":
-                pieces.append((target.start_byte, target.start_byte, (1, depth), text))
+                pieces.append((start, start, (1, depth), text))
             else:
-                pieces.append((target.start_byte, target.end_byte, (2, 0), text))
+                pieces.append((start, end, (2, 0), text))
         pieces.sort(key=lambda piece: (piece[0], piece[2], piece[1]))
         source_bytes = source.source_bytes
-        cursor = base_node.start_byte
+        cursor = base_nodes[0].start_byte
         mutated = b""
         for start, end, _, text in pieces:
             mutated += source_bytes[cursor:start] + text
             cursor = end
-        mutated += source_bytes[cursor : base_node.end_byte]
+        mutated += source_bytes[cursor : base_nodes[-1].end_byte]
         return mutated.decode(source.encoding)
 
     def _mutate_targets(
         self,
         symb: Symbol,
         edits: list[Symbol],
-        node_symb: Symbol,
-        base_node: ts.Node,
-        locate_node: NodeLocator,
-    ) -> dict[tuple[Symbol, str], tuple[ts.Node, int]]:
-        """Check the edits of the template symbol symb, which edits
-        the node node_symb (see _mutate_text), and return their
-        targets by node(Id) symbol and kind of edit, together with
-        their depth below the base node."""
-        targets: dict[tuple[Symbol, str], tuple[ts.Node, int]] = {}
+        base: Symbol,
+        base_nodes: list[ts.Node],
+        original: bool,
+    ) -> dict[tuple[Symbol, str], tuple[list[ts.Node], int]]:
+        """Check the edits of the template symbol symb, which mutates
+        the node (or span) base (see _mutate_text), and return the
+        nodes of their targets by target symbol and kind of edit,
+        together with their depth below the nodes of the base."""
+        targets: dict[tuple[Symbol, str], tuple[list[ts.Node], int]] = {}
         for edit in edits:
             if (
                 edit.type != SymbolType.Function
-                or edit.name not in ("replace", "append", "prepend")
+                or edit.name not in EDIT_KINDS
                 or len(edit.arguments) != 2
-                or not edit.arguments[0].match("node", 1)
+                or not (
+                    edit.arguments[0].match("node", 1)
+                    or (edit.name in SPAN_EDIT_KINDS and is_span(edit.arguments[0]))
+                )
             ):
                 raise ValueError(
-                    f"Symbol {edit} in template {symb} is not an edit of a node."
+                    f"Symbol {edit} in template {symb} is not an edit of a node "
+                    "(or for replace, of a span)."
                 )
             target_symb = edit.arguments[0]
-            _, target = self._locate_template_node(target_symb, locate_node)
-            depth = _depth_below(target, base_node)
-            if depth is None:
+            _, nodes = self.locate_target(target_symb, original)
+            depth = _depth_in(nodes[0], base_nodes)
+            if depth is None or _depth_in(nodes[-1], base_nodes) is None:
                 raise ValueError(
                     self.node_message(
                         target_symb,
                         f"Target of edit {edit} in template {symb} is not "
-                        f"inside the mutated node {node_symb}.",
+                        f"inside the mutated {base}.",
                     )
                 )
             if (target_symb, edit.name) in targets:
@@ -255,21 +339,37 @@ class NodeFormatter:
                         f"template {symb}, expected at most one.",
                     )
                 )
-            targets[(target_symb, edit.name)] = (target, depth)
+            targets[(target_symb, edit.name)] = (nodes, depth)
         for (replaced_symb, name), (replaced, _) in targets.items():
-            if name != "replace":
-                continue
-            for (target_symb, _), (target, _) in targets.items():
-                # a depth of 0 is the replaced node itself
-                if _depth_below(target, replaced):
-                    raise ValueError(
-                        self.node_message(
-                            target_symb,
-                            f"Edit of node in template {symb} is inside the "
-                            f"node {replaced_symb}, which is replaced.",
-                        )
-                    )
+            if name == "replace":
+                self._check_inside_replaced(symb, replaced_symb, replaced, targets)
         return targets
+
+    def _check_inside_replaced(
+        self,
+        symb: Symbol,
+        replaced_symb: Symbol,
+        replaced: list[ts.Node],
+        targets: dict[tuple[Symbol, str], tuple[list[ts.Node], int]],
+    ) -> None:
+        """Check that no target of an edit of the template symbol symb
+        is inside the replaced nodes, except for the edits prepending
+        to the first one and appending to the last one."""
+        for (target_symb, name), (nodes, _) in targets.items():
+            if (target_symb, name) == (replaced_symb, "replace"):
+                continue
+            if name == "prepend" and nodes[0] == replaced[0]:
+                continue
+            if name == "append" and nodes[-1] == replaced[-1]:
+                continue
+            if any(_depth_in(node, replaced) is not None for node in nodes):
+                raise ValueError(
+                    self.node_message(
+                        target_symb,
+                        f"Edit of node in template {symb} is inside "
+                        f"{replaced_symb}, which is replaced.",
+                    )
+                )
 
     def _locate_template_node(
         self, symb: Symbol, locate_node: NodeLocator

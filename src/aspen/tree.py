@@ -16,7 +16,7 @@ from clingo.solving import Model
 from clingo.symbol import Function, Number, String, Symbol, SymbolType, Tuple_
 
 import aspen
-from aspen.messages import NodeFormatter, cons_list_symb2py
+from aspen.messages import SPAN_EDIT_KINDS, NodeFormatter, cons_list_symb2py, is_span
 from aspen.source import Source, StringEncoding, source_str
 from aspen.utils.include_resolver import resolve_meta_encoding_file, rewrite_includes
 from aspen.utils.log import get_clingo_logger, get_logger, get_ts_logger
@@ -24,7 +24,6 @@ from aspen.utils.tree_sitter_utils import (
     Change,
     calc_edit_range,
     calc_node_append_range,
-    calc_node_edit_range,
     calc_node_prepend_range,
     edit_tree,
     format_syntax_error,
@@ -716,30 +715,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         target node of any given derived edit fact.
 
         """
-        # a node may have one edit of each kind (replace, append, prepend)
-        kind2edits: defaultdict[tuple[Symbol, str], list[Symbol]] = defaultdict(list)
-        for edit in edit_symbols:
-            kind2edits[(edit.arguments[0], edit.name)].append(edit)
-        dupes = sorted(
-            (kind for kind, edits in kind2edits.items() if len(edits) > 1),
-            key=lambda kind: (self._formatter.node_position(kind[0]), kind[1]),
-        )
-        if len(dupes) > 0:
-            messages = [
-                self._formatter.node_message(
-                    target,
-                    f"Multiple {name} edits defined for node, expected at most one: "
-                    + "; ".join(
-                        sorted(
-                            self._formatter.describe_edit(e)
-                            for e in kind2edits[(target, name)]
-                        )
-                    )
-                    + ".",
-                )
-                for target, name in dupes
-            ]
-            raise ValueError("\n".join(messages))
+        self._check_edits(edit_symbols)
         for s in edit_symbols:
             if s not in deps.keys():
                 deps[s] = []
@@ -766,6 +742,87 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             )
         return edit_symbols
 
+    def _check_edits(self, edit_symbols: Sequence[Symbol]) -> None:
+        """Check that the edits are applicable together, raising a
+        ValueError describing every problem otherwise: each node may
+        have at most one edit of each kind (where a replacement of a
+        span counts as one of each of its nodes), and a node in a
+        replaced span may only be prepended to if it is the first
+        one, and appended to if it is the last one."""
+        targets: dict[Symbol, list[ts.Node]] = {}
+        for edit in edit_symbols:
+            target = edit.arguments[0]
+            if is_span(target) and edit.name not in SPAN_EDIT_KINDS:
+                raise ValueError(
+                    f"Error processing edit symbol {edit}: only replace edits "
+                    "(and delete) may have a span as target."
+                )
+            if not target.match("node", 1) and not is_span(target):
+                raise ValueError(
+                    f"Error processing edit symbol {edit}. "
+                    f"Symbol {target} is not a valid node symbol; "
+                    "perhaps you forgot to wrap it in node(...)?"
+                )
+            targets[target] = self._formatter.locate_target(target)[1]
+        # the edits of each kind of each node, by the node
+        node_edits: defaultdict[tuple[ts.Node, str], list[Symbol]] = defaultdict(list)
+        for edit in edit_symbols:
+            for node in targets[edit.arguments[0]]:
+                node_edits[(node, edit.name)].append(edit)
+        conflicts = {frozenset(edits) for edits in node_edits.values() if len(edits) > 1}
+        messages = [self._conflict_message(edits) for edits in conflicts]
+        for edit in edit_symbols:
+            if edit.name == "replace":
+                continue
+            node = targets[edit.arguments[0]][0]
+            for replace in node_edits.get((node, "replace"), []):
+                replaced = targets[replace.arguments[0]]
+                end = replaced[0] if edit.name == "prepend" else replaced[-1]
+                if node != end:
+                    messages.append(
+                        (
+                            self._formatter.node_position(edit.arguments[0]),
+                            self._formatter.node_message(
+                                edit.arguments[0],
+                                f"Cannot {edit.name} to a node inside the "
+                                f"replaced span {replace.arguments[0]}, only "
+                                "to its first node (prepend) or last node "
+                                f"(append): {self._formatter.describe_edit(edit)}.",
+                            ),
+                        )
+                    )
+        if messages:
+            raise ValueError("\n".join(message for _, message in sorted(messages)))
+
+    def _conflict_message(self, edits: frozenset[Symbol]) -> tuple[tuple[str, int], str]:
+        """Message describing edits of the same kind of a node, with a
+        key to sort it by position."""
+        kind = next(iter(edits)).name
+        targets = sorted(
+            {edit.arguments[0] for edit in edits}, key=self._formatter.node_position
+        )
+        position = self._formatter.node_position(targets[0])
+        if len(targets) == 1:
+            descriptions = sorted(self._formatter.describe_edit(e) for e in edits)
+            return position, self._formatter.node_message(
+                targets[0],
+                f"Multiple {kind} edits defined for node, expected at most one: "
+                + "; ".join(descriptions)
+                + ".",
+            )
+        located = sorted(
+            (self._formatter.node_position(e.arguments[0]), str(e), e) for e in edits
+        )
+        return position, "\n".join(
+            [f"{kind.capitalize()} edits of overlapping nodes, expected at most one:"]
+            + [
+                self._formatter.node_message(
+                    e.arguments[0], self._formatter.describe_edit(e)
+                )
+                for _, _, e in located
+            ]
+        )
+
     def _edit_sources_from_symbs(self, edit_symbols: Sequence[Symbol]) -> set[Symbol]:
         """Apply edits to tree according to operations given in
         edit_symbols, and return dictionary who's keys are source
@@ -781,16 +838,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         for symb in edit_symbols:
             logger.info("Processing edit symbol: %s.", symb)
             template_symb = symb.arguments[1]
-            try:
-                target_source, target_node = self._source_path_symb2ts(
-                    self._node_id2source_path[symb.arguments[0]]
-                )
-            except KeyError as e:
-                raise ValueError(
-                    f"Error processing edit symbol {symb}. "
-                    f"Symbol {symb.arguments[0]} is not a valid node symbol; "
-                    "perhaps you forgot to wrap it in node(...)?"
-                ) from e
+            target_source, target_nodes = self._formatter.locate_target(symb.arguments[0])
             insert_text = self._formatter.template_symb2str(template_symb)
             logger.debug("Evaluted template of edit symbol: '%s'", insert_text)
             insert_bytes = bytes(insert_text, target_source.encoding)
@@ -802,12 +850,19 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                         target_source.source_bytes, encoding=target_source.encoding
                     ).replace("\n", "\\n"),
                 )
+            first, last = target_nodes[0], target_nodes[-1]
             if symb.match("replace", 2):
-                edit_range = calc_node_edit_range(target_node, insert_bytes)
+                edit_range = calc_edit_range(
+                    first.start_byte,
+                    last.end_byte,
+                    first.start_point,
+                    last.end_point,
+                    insert_bytes,
+                )
             elif symb.match("append", 2):
-                edit_range = calc_node_append_range(target_node, insert_bytes)
+                edit_range = calc_node_append_range(last, insert_bytes)
             elif symb.match("prepend", 2):
-                edit_range = calc_node_prepend_range(target_node, insert_bytes)
+                edit_range = calc_node_prepend_range(first, insert_bytes)
             else:  # nocoverage
                 raise RuntimeError("Code should be unreachable.")
             target_source.source_bytes = edit_tree(

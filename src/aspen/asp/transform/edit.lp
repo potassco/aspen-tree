@@ -9,105 +9,82 @@ def symbol_to_string(symbol: Symbol) -> String:
 
 #end.
 
-aspen(replace(N,"")) :- aspen(delete(N)).
+% This encoding orders the edits derived by a meta-encoding, and
+% queries the paths of the nodes they refer to, so that aspen can find
+% them in the sources. Its helper predicates start with _aspen, and
+% are not terms of aspen/1, so that the grounder can estimate the
+% sizes of their joins separately.
 
-aspen(node_in_template(Template, Item)) :-
-  aspen(item_in_template(Template, Item)), Item=node(N).
+aspen(replace(T, "")) :- aspen(delete(T)).
 
-aspen(list_in_template(Template, List)) :-
-  aspen(item_in_template(Template, Item)), Item=join(Sep, List).
+% _aspen_edit(Edit, Target, Template): the edits.
+_aspen_edit(replace(T, S), T, S) :- aspen(replace(T, S)).
+_aspen_edit(append(T, S), T, S) :- aspen(append(T, S)).
+_aspen_edit(prepend(T, S), T, S) :- aspen(prepend(T, S)).
 
-aspen(list_in_template(Template, List)) :-
-  aspen(item_in_template(Template, Item)), Item=format(FormatStr, List).
+% _aspen_item(Template, Item): the templates of edits and messages,
+% and the templates they contain.
+_aspen_item(S, S) :- _aspen_edit(_, _, S).
+_aspen_item(S, S) :-
+  aspen(log(_, _, S);log(_, S);print(S);print(S, _);exception(_, S);exception(S)).
 
-aspen(list_in_template(Template, Rest)) :-
-  aspen(list_in_template(Template, (First, Rest))).
+_aspen_list(S, L) :- _aspen_item(S, (format(_, L);join(_, L))).
+_aspen_list(S, L) :- _aspen_list(S, (_, L)).
+_aspen_item(S, I) :- _aspen_list(S, (I, _)).
 
-aspen(item_in_template(Template, First)) :-
-  aspen(list_in_template(Template, (First, Rest))).
+% In mutate(Base, Edits), the base is inserted like any other item. The
+% edits (an edit or a list of edits) are not applied to the source, so
+% they are not ordered with other edits; only their templates are items.
+_aspen_item(S, B) :- _aspen_item(S, mutate(B, _)).
+_aspen_mutate_edits(S, E) :- _aspen_item(S, mutate(_, E)).
+_aspen_mutate_edits(S, L) :- _aspen_mutate_edits(S, (_, L)).
+_aspen_mutate_edit(S, E) :- _aspen_mutate_edits(S, (E, _)).
+_aspen_mutate_edit(S, E) :-
+  _aspen_mutate_edits(S, E), E=(replace(_, _);append(_, _);prepend(_, _)).
+_aspen_item(S, I) :- _aspen_mutate_edit(S, (replace(_, I);append(_, I);prepend(_, I))).
 
-% In mutate(Base, Edits), the base is inserted like any other item.
-% The edits are not applied to the source, so they are not ordered
-% with other edits; only their templates are items of the template.
-aspen(item_in_template(Template, Base)) :-
-  aspen(item_in_template(Template, mutate(Base, Edits))).
+% _aspen_ref(R): the references to nodes, of the form node(N) or
+% span(node(N), node(M)), as targets, items, and locations of messages.
+_aspen_ref(R) :- _aspen_edit(_, R, _).
+_aspen_ref(R) :- _aspen_item(_, R).
+_aspen_ref(R) :- _aspen_item(_, original(R)).
+_aspen_ref(R) :- _aspen_mutate_edit(_, (replace(R, _);append(R, _);prepend(R, _))).
+_aspen_ref(R) :- aspen(log(R, _, _);exception(R, _)).
 
-aspen(_mutate_edits(Template, Edits)) :-
-  aspen(item_in_template(Template, mutate(Base, Edits))).
-aspen(_mutate_edits(Template, Rest)) :-
-  aspen(_mutate_edits(Template, (First, Rest))).
+% _aspen_ends(R, N, M): reference R covers N and its next siblings up
+% to M, which _aspen_covers(R, X) enumerates.
+_aspen_ends(node(N), N, N) :- _aspen_ref(node(N)).
+_aspen_ends(span(node(N), node(M)), N, M) :- _aspen_ref(span(node(N), node(M))).
+_aspen_covers(R, N) :- _aspen_ends(R, N, _).
+_aspen_covers(R, X') :- _aspen_covers(R, X), _aspen_ends(R, _, M), X != M, next_sibling(X, X').
 
-aspen(_mutate_edit(Template, First)) :-
-  aspen(_mutate_edits(Template, (First, Rest))).
-aspen(_mutate_edit(Template, Edit)) :-
-  aspen(_mutate_edits(Template, Edit)),
-  Edit=(replace(N, S);append(N, S);prepend(N, S)).
+% aspen locates references by the paths of their first and last nodes
+aspen(query(path_of_node((N;M)))) :- _aspen_ends(_, N, M).
 
-aspen(item_in_template(Template, S)) :-
-  aspen(_mutate_edit(Template, (replace(N, S);append(N, S);prepend(N, S)))).
+% Ordering: aspen(comes_before(E1, E2)) means that edit E1 must be
+% applied before edit E2 for the text of E2 to be correct.
 
-aspen(item_in_template(Template, Template)) :-
-  aspen(replace(Node, Template);append(Node, Template);prepend(Node, Template)).
+% A template inserting node(N) or a span inserts the text of its nodes
+% after the edits of them and of their descendants, so these edits
+% come first, except for those of the targets of the edit using the
+% template, which are ordered below. The targets of an edit are the
+% children of P with indices from Lo to Hi (where the root of a source
+% has the parent "none").
+_aspen_inserts(E, X) :- _aspen_edit(E, _, S), _aspen_item(S, R), _aspen_covers(R, X).
+_aspen_inserts(E, Y) :- _aspen_inserts(E, X), child(X, Y).
 
-aspen(_edit_target(replace(node(N), S), N)) :- aspen(replace(node(N), S)).
-aspen(_edit_target(append(node(N), S), N)) :- aspen(append(node(N), S)).
-aspen(_edit_target(prepend(node(N), S), N)) :- aspen(prepend(node(N), S)).
+_aspen_position(X, P, I) :- child(P, X), child_index(X, I).
+_aspen_position(X, none, 0) :- source_root(_, X).
+_aspen_range(E, P, Lo, Hi) :-
+  _aspen_edit(E, T, _), _aspen_ends(T, N, M), _aspen_position(N, P, Lo), _aspen_position(M, P, Hi).
 
-% aspen(comes_before(Edit',Edit)) means Edit' must occur before Edit
-% for the text replacement to be correct.
-% The join is split into small steps, so that only descendants of
-% nodes inserted by edits are checked against replacement targets
-% (instead of all pairs of templates and replacements).
-aspen(_edit_insert(replace(N, S), InsertNode)) :-
-  aspen(replace(N, S)), aspen(node_in_template(S, node(InsertNode))).
-aspen(_edit_insert(append(N, S), InsertNode)) :-
-  aspen(append(N, S)), aspen(node_in_template(S, node(InsertNode))).
-aspen(_edit_insert(prepend(N, S), InsertNode)) :-
-  aspen(prepend(N, S)), aspen(node_in_template(S, node(InsertNode))).
+aspen(comes_before(Inner, E)) :-
+  _aspen_inserts(E, X), _aspen_edit(Inner, T, _), _aspen_covers(T, X),
+  _aspen_position(X, P', I), _aspen_range(E, P, Lo, Hi), #false : P' = P, Lo <= I, I <= Hi.
 
-aspen(_insert_desc(InsertNode, InsertNode)) :- aspen(_edit_insert(_, InsertNode)).
-aspen(_insert_desc(InsertNode, Node')) :-
-  aspen(_insert_desc(InsertNode, Node)), child(Node, Node').
-
-aspen(_edit_insert_desc(Edit, Node)) :-
-  aspen(_edit_insert(Edit, InsertNode)), aspen(_insert_desc(InsertNode, Node)).
-
-% A node inserted by a template has the text it has after all edits
-% of it and of its descendants, so these edits must come first.
-% Edits of the same node are excluded, as they are ordered below.
-aspen(comes_before(Inner, Edit)) :-
-  aspen(_edit_insert_desc(Edit, TargetNode)),
-  aspen(_edit_target(Inner, TargetNode)),
-  aspen(_edit_target(Edit, EditTarget)), EditTarget != TargetNode.
-
-% Text appended or prepended to a node becomes part of the node, so
-% replacing the node must come first, or it would overwrite the text.
-aspen(comes_before(replace(N, S), append(N, S'))) :-
-  aspen(replace(N, S)), aspen(append(N, S')).
-aspen(comes_before(replace(N, S), prepend(N, S'))) :-
-  aspen(replace(N, S)), aspen(prepend(N, S')).
-
-% query the paths of node ids that occur as targets or as inserts
-% in templates, so that they can be used by aspen to find the
-% corresponding tree-sitter nodes for processing.
-
-% targets
-aspen(query(path_of_node(N))) :-
-  aspen(log(node(N), _, _);exception(node(N), _);
-        replace(node(N), _);append(node(N), _);prepend(node(N), _)).
-
-% template inserts
-aspen(item_in_template(Template, Template)) :-
-  aspen(log(_, _, Template);log(_, Template);print(Template);print(Template, _);
-     	exception(_, Template);exception(Template)).
-
-aspen(query(path_of_node(Node))) :- aspen(node_in_template(_, node(Node))).
-
-% inserts of original text create no dependencies between edits, as
-% they are converted to text from the sources before any edits
-aspen(query(path_of_node(Node))) :-
-  aspen(item_in_template(_, original(node(Node)))).
-
-% targets of the edits of mutate(Base, Edits)
-aspen(query(path_of_node(N))) :-
-  aspen(_mutate_edit(_, (replace(node(N), S);append(node(N), S);prepend(node(N), S)))).
+% Text appended or prepended to a node becomes part of it, so replacing
+% the node (or a span containing it) comes first, as it would overwrite
+% the text otherwise.
+aspen(comes_before(R, E)) :-
+  _aspen_edit(R, T, _), R=replace(_, _), _aspen_covers(T, X),
+  _aspen_edit(E, node(X), _), E=(append(_, _);prepend(_, _)).

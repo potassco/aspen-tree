@@ -556,7 +556,15 @@ def _expected_hint(language: ts.Language, node: ts.Node) -> list[str]:
 
 def format_node_span(node: ts.Node, source_bytes: bytes, encoding: str) -> str:
     """Render the source line(s) spanned by node, with the span
-    underlined by carets.
+    underlined by carets, see format_point_span."""
+    return format_point_span(node.start_point, node.end_point, source_bytes, encoding)
+
+
+def format_point_span(
+    start: ts.Point, end: ts.Point, source_bytes: bytes, encoding: str
+) -> str:
+    """Render the source line(s) between the start and end points,
+    with the span underlined by carets.
 
     A span within a single line gets that line, followed by one
     caret-underlined line. A span crossing multiple lines shows its
@@ -566,7 +574,6 @@ def format_node_span(node: ts.Node, source_bytes: bytes, encoding: str) -> str:
     span covers more than two lines.
     """
     lines = source_bytes.split(b"\n")
-    start, end = node.start_point, node.end_point
     first_line = lines[start.row].decode(encoding, errors="replace")
     if start.row == end.row:
         width = max(1, end.column - start.column)

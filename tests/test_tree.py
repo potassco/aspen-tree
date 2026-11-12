@@ -433,7 +433,7 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             ValueError,
             r"^s\(0\):1:12-13: Target of edit replace\(node\(\d+\),\"\"\) in "
             r"template mutate\(node\(\d+\),replace\(node\(\d+\),\"\"\)\) is "
-            r"not inside the mutated node node\(\d+\)\.\nx :- f\(1\), q\.\n",
+            r"not inside the mutated node\(\d+\)\.\nx :- f\(1\), q\.\n",
         ):
             self.assert_prints_mutated('replace(node(D), "")', "", base="node(H)")
         with self.assertRaisesRegex(
@@ -443,13 +443,17 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
                 '(append(node(N), "2"), (append(node(N), "3"), ()))', ""
             )
         with self.assertRaisesRegex(
-            ValueError, r"s\(0\):1:7-8: Edit of node in template .* is inside the node"
+            ValueError,
+            r"s\(0\):1:7-8: Edit of node in template .* is inside node\(\d+\), "
+            r"which is replaced",
         ):
             self.assert_prints_mutated(
                 '(prepend(node(N), "2"), (replace(node(R), "3"), ()))', ""
             )
         with self.assertRaisesRegex(
-            ValueError, r"Symbol foo in template .* is not an edit of a node\."
+            ValueError,
+            r"Symbol foo in template .* is not an edit of a node "
+            r"\(or for replace, of a span\)\.",
         ):
             self.assert_prints_mutated("foo", "")
         with self.assertRaisesRegex(

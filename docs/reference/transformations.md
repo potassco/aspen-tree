@@ -22,12 +22,43 @@ are expected to have a single stable model.
 | `aspen(prepend(node(N), T))` | Insert the text of `T` before node `N`. |
 | `aspen(append(node(N), T))` | Insert the text of `T` after node `N`. |
 | `aspen(delete(node(N)))` | Delete node `N`, i.e. replace it by `""`. |
+| `aspen(replace(span(node(N), node(M)), T))` | Replace the text from the start of node `N` to the end of node `M` by the text of `T`, see [spans](#spans). |
+| `aspen(delete(span(node(N), node(M))))` | Delete the text from the start of node `N` to the end of node `M`. |
 
 A node may have at most one edit of each kind; multiple edits of the
 same kind for a node are an error. The replacement of a node is applied
 before the text prepended and appended to it, so that
 `replace(node(N), "4")`, `prepend(node(N), "3+")` and
 `append(node(N), "+2")` turn `f(1)` into `f(3+4+2)`.
+
+### Spans
+
+A span `span(node(N), node(M))` consists of node `N` and its next
+siblings up to node `M`, which must be `N` itself or a later sibling of
+`N`. All siblings count, including tokens such as `,` and comments
+(see `next_sibling/2`). A span's text extends from the start of `N` to
+the end of `M`, including the text between the nodes.
+
+Spans can be replaced (and deleted) and inserted by templates, but
+not prepended or appended to. A replacement of a span counts as a
+replacement of each of its nodes, so it must not overlap with another
+replacement. The first node of a replaced span may be prepended to,
+and its last node appended to, which inserts the text before and after
+the replacement; other edits of nodes in a replaced span are an error.
+For example, in `a :- b, c, d.`, the following replaces the span
+`b, c` of the body literals of `b` and `c` (and the comma between them):
+
+```
+lit(X, L) :- type(L, "body_literal"), child(L, A), child(A, I), leaf_text(I, X).
+aspen(replace(span(node(B), node(C)), "x")) :- lit("b", B), lit("c", C).
+```
+
+```console
+$ printf 'a :- b, c, d.\n' | aspen transform - -l clingo -f span.lp
+a :- x, d.
+```
+
+### Text of edits
 
 The text of the edits is inserted as is: it is the responsibility of
 the meta-encoding to produce valid text, e.g. by adding whitespace or
@@ -42,10 +73,12 @@ The text of an edit, message or print is given by a template:
 |---|---|
 | `"..."` | The string itself. |
 | `node(N)` | The text of node `N`, including the edits of `N` and its descendants (see [ordering](#ordering-of-edits)). |
+| `span(node(N), node(M))` | The text of the [span](#spans) from node `N` to node `M`, including the edits of its nodes and their descendants. |
 | `original(node(N))` | The text of node `N` at the start of the transformation step, before any edits. |
+| `original(span(node(N), node(M)))` | The text of the span at the start of the transformation step. |
 | `format(S, L)` | The Python format string `S`, with the templates of the list `L` inserted, e.g. `format("{} :- {}.", (node(H), (node(B), ())))`. |
 | `join(S, L)` | The templates of the list `L`, joined by the string `S`. |
-| `mutate(B, E)` | The text of `B` (`node(N)` or `original(node(N))`) as if the edits `E` were applied to it, without changing the source, see [below](#hypothetical-edits). |
+| `mutate(B, E)` | The text of `B` (a node or span, optionally wrapped in `original(...)`) as if the edits `E` were applied to it, without changing the source, see [below](#hypothetical-edits). |
 | `syntax_error(node(N))` | A description of the syntax error at node `N`. |
 
 Lists are written as nested pairs ending in the empty tuple, i.e. the
@@ -57,13 +90,16 @@ defines for all meta-encodings.
 
 ### Hypothetical edits
 
-`mutate(B, E)` gives the text of a node with some of its descendants
-changed, without changing the source. This allows producing several
-modified copies of a node in one step. `E` is a single edit, or a list
-of edits, of the form `replace(node(M), T)`, `append(node(M), T)` or
-`prepend(node(M), T)`, where `M` is the node of `B` or one of its
-descendants. For example, the following adds a copy of each rule with
-its head replaced by `d`:
+`mutate(B, E)` gives the text of a node (or span) with some of its
+descendants changed, without changing the source. This allows
+producing several modified copies of a node in one step. `B` is
+`node(N)`, a [span](#spans), or either of them wrapped in
+`original(...)` to start from the text before any edits. `E` is a
+single edit, or a list of edits, of the form `replace(T, S)`,
+`append(node(M), S)` or `prepend(node(M), S)`, where `T` is `node(M)`
+or a span, and the nodes are those of `B` or their descendants. For
+example, the following adds a copy of each rule with its head replaced
+by `d`:
 
 ```
 aspen(append(node(R), format("\n{}", (mutate(node(R), replace(node(H), "d")), ())))) :-
@@ -72,9 +108,10 @@ aspen(append(node(R), format("\n{}", (mutate(node(R), replace(node(H), "d")), ()
 
 The edits follow the same rules as edits of the source: at most one
 edit of each kind per node, and the replacement of a node comes before
-the text prepended and appended to it. In addition, a node that is
-replaced must not contain the target of another of the edits, as the
-replacement would overwrite it.
+the text prepended and appended to it. In addition, a node (or span)
+that is replaced must not contain the target of another of the edits,
+as the replacement would overwrite it, except that the first node of a
+replaced span may be prepended to, and its last node appended to.
 
 See the [pool compilation encoding](encodings/index.md#compiling-away-pools)
 for an extensive use of hypothetical edits.
@@ -87,14 +124,16 @@ text inserted by templates well-defined:
 - A template inserting `node(N)` (directly, or via `mutate(node(N), E)`)
   inserts the text of `N` after the edits of `N` and of its
   descendants. These edits are applied before the edit using the
-  template, except for the edits of the node the edit itself targets.
-- The replacement of a node is applied before the text prepended and
-  appended to it.
+  template, except for the edits of the nodes the edit itself targets.
+  Likewise, a template inserting a span inserts its text after the
+  edits of its nodes and their descendants.
+- The replacement of a node (or of a span) is applied before the text
+  prepended and appended to it.
 - `aspen(comes_before(E1, E2))` additionally orders edit `E1` before
   edit `E2`, where both are given as the full edit terms, e.g.
   `comes_before(replace(node(3), "x"), append(node(5), "y"))`.
 
-`original(node(N))` creates no ordering, as it inserts the text before
+`original(node(N))` (and `original(span(...))`) creates no ordering, as it inserts the text before
 any edits. This makes it possible, e.g., to swap two nodes, which with
 `node(N)` would require each replacement to come before the other:
 
