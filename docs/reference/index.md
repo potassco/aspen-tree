@@ -7,6 +7,6 @@
 - [Meta-encodings](transformations.md): how meta-encodings edit
   sources, report messages and consist of several steps.
 - [Bundled encodings](encodings/index.md): transformations, queries and
-  derived predicates shipped with aspen, such as compiling away the
+  derived predicates shipped with aspen-tree, such as compiling away the
   pools of clingo programs.
 - [API](api/index.md): the Python interface.

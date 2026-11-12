@@ -4,7 +4,7 @@ icon: material/file-code
 
 # Bundled encodings
 
-aspen ships encodings that meta-encodings can include via the `@aspen/`
+aspen-tree ships encodings that meta-encodings can include via the `@aspen/`
 prefix, e.g. `#include "@aspen/generic/queries/path_of_node.lp".`
 They are organized by language: those under `generic/` work for any
 grammar, those under `clingo/` and `aspcore2/` for the respective
@@ -39,7 +39,7 @@ create copies of the statement. The encoding derives the variants via
 
 `@aspen/generic/raise_syntax_error.lp` derives an exception for each
 `error/1` and `missing/1` node, describing the syntax error. It is
-only useful together with `--allow-syntax-errors`, as aspen reports
+only useful together with `--allow-syntax-errors`, as aspen-tree reports
 syntax errors by itself otherwise.
 
 ## Queries

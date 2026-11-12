@@ -1,8 +1,8 @@
-site_name: aspen
-site_url: https://docs.potassco.org/aspen/
+site_name: aspen-tree
+site_url: https://docs.potassco.org/aspen-tree/
 site_description:
-repo_name: potassco/aspen
-repo_url: https://github.com/potassco/aspen
+repo_name: potassco/aspen-tree
+repo_url: https://github.com/potassco/aspen-tree
 copyright: Copyright &copy; 2024 Potassco
 
 extra_css:
@@ -61,7 +61,7 @@ theme:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/potassco/aspen
+      link: https://github.com/potassco/aspen-tree
     - icon: potassco-logo
       link: https://potassco.org
   generator: false

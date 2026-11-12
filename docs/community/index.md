@@ -26,4 +26,4 @@ Your participation keeps our project thriving. Thank you for being part of our
 community!
 
 !!! info
-    *aspen* is part of the [Potassco](https://potassco.org) suite.
+    *aspen-tree* is part of the [Potassco](https://potassco.org) suite.

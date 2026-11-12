@@ -16,15 +16,15 @@ hide:
 === "Development mode"
 
     ```console
-    git clone https://github.com/potassco/aspen.git
-    cd aspen
+    git clone https://github.com/potassco/aspen-tree.git
+    cd aspen-tree
     pip install -e .[dev]
     ```
 
     !!! warning
         Use only for development purposes
 
-aspen parses sources with tree-sitter grammars, which are installed as
+aspen-tree parses sources with tree-sitter grammars, which are installed as
 separate Python packages. A grammar named `NAME` is loaded from the
 package `tree_sitter_NAME`; for clingo programs, install
 [tree-sitter-clingo](https://pypi.org/project/tree-sitter-clingo/):

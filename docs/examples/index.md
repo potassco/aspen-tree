@@ -60,7 +60,7 @@ b. a.
 ```
 
 With `node(A)` and `node(B)` instead, each replacement would have to be
-applied before the other, which aspen reports as an error:
+applied before the other, which aspen-tree reports as an error:
 
 ```
 error: Transformation edits define cyclic dependencies. One such cycle:

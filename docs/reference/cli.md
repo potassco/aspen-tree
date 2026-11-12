@@ -21,15 +21,15 @@ These options come before the subcommand, e.g.
 
 `--log {error,warning,info,debug}`
 :   The log level, `warning` by default. Messages of meta-encodings
-    (see [messages](transformations.md#messages)) and of aspen itself
+    (see [messages](transformations.md#messages)) and of aspen-tree itself
     are shown on standard error if their level is at least this level,
-    as e.g. `WARNING:  - message`. With `info`, aspen reports what it
+    as e.g. `WARNING:  - message`. With `info`, aspen-tree reports what it
     parses, grounds and edits, and with `debug` additionally the facts,
     models and parser actions. With `debug`, errors are shown with
     their Python traceback.
 
 `-v`, `--version`
-:   Print the version of aspen and exit.
+:   Print the version of aspen-tree and exit.
 
 ## Sources
 

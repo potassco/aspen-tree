@@ -4,7 +4,7 @@ icon: material/file-tree
 
 # Fact representation
 
-aspen represents the syntax trees of its sources as facts, which are
+aspen-tree represents the syntax trees of its sources as facts, which are
 the input of meta-encodings. They can be printed with `aspen reify`.
 
 For example, `a :- b.` is represented as follows (the order of the
@@ -59,7 +59,7 @@ The node types and field names are those of the grammar, see e.g. the
 
 ## Syntax errors
 
-By default, aspen reports syntax errors of the sources as errors, both
+By default, aspen-tree reports syntax errors of the sources as errors, both
 when parsing them and when edits introduce them. With
 `--allow-syntax-errors` (`raise_syntax_errors=False` in Python), sources
 with syntax errors are reified, with their erroneous nodes marked by

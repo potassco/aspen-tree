@@ -10,7 +10,7 @@ what to do with the sources by deriving terms of the form `aspen(T)`:
 edits of the source text, messages, and the next transformation step.
 All other predicates can be used freely.
 
-aspen grounds and solves the meta-encoding together with the facts and
+aspen-tree grounds and solves the meta-encoding together with the facts and
 processes the `aspen(T)` terms of the first stable model. Meta-encodings
 are expected to have a single stable model.
 
@@ -85,7 +85,7 @@ Lists are written as nested pairs ending in the empty tuple, i.e. the
 list of `a`, `b` and `c` is `(a, (b, (c, ())))`.
 
 To insert other terms, such as numbers or constants, into a template,
-convert them to strings with `@symbol_to_string(X)`, which aspen
+convert them to strings with `@symbol_to_string(X)`, which aspen-tree
 defines for all meta-encodings.
 
 ### Hypothetical edits
@@ -142,7 +142,7 @@ aspen(replace(node(A), original(node(B)))) :- swap(A, B).
 aspen(replace(node(B), original(node(A)))) :- swap(A, B).
 ```
 
-If the order is cyclic, aspen reports an error showing one of the
+If the order is cyclic, aspen-tree reports an error showing one of the
 cycles.
 
 ## Messages
@@ -216,7 +216,7 @@ Some bundled encodings provide *queries*: a meta-encoding derives
 ## Including bundled encodings
 
 The `#include` directive of clingo resolves relative paths with
-respect to the including file. aspen additionally resolves paths
+respect to the including file. aspen-tree additionally resolves paths
 starting with `@aspen/` to its [bundled encodings](encodings/index.md),
 in meta-encoding files and strings, as well as in the files they
 include:

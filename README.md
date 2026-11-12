@@ -1,11 +1,11 @@
-# aspen
+# aspen-tree
 
-aspen analyzes and transforms programs written in any language with a
+aspen-tree analyzes and transforms programs written in any language with a
 [tree-sitter](https://tree-sitter.github.io/) grammar, with transformations
 written in answer set programming (ASP). It is mostly used for the
 [clingo](https://potassco.org/clingo/) ASP language itself.
 
-aspen turns the syntax tree of a program into facts, and applies a
+aspen-tree turns the syntax tree of a program into facts, and applies a
 *meta-encoding*, an ordinary clingo program over these facts, which describes
 edits of the program text. Everything not edited, such as layout and comments,
 stays as it was. For example, renaming the identifier `b` to `c`:
@@ -27,8 +27,8 @@ pip install aspen-tree-5 tree-sitter-clingo
 
 ## Documentation
 
-The documentation is available at <https://docs.potassco.org/aspen/>. It can
-also be built locally with
+The documentation is available at <https://docs.potassco.org/aspen-tree/>. It
+can also be built locally with
 
 ```bash
 pip install .[doc]

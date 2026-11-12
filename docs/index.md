@@ -4,15 +4,15 @@ hide:
   - toc
 ---
 
-# aspen
+# aspen-tree
 
-*aspen* analyzes and transforms programs written in any language with a
+*aspen-tree* analyzes and transforms programs written in any language with a
 [tree-sitter](https://tree-sitter.github.io/) grammar, with
 transformations written in answer set programming (ASP). It is mostly
 used for the [clingo](https://potassco.org/clingo/) ASP language
 itself.
 
-aspen has two main functionality:
+aspen-tree has two main functionality:
 
 1. **Reify.** Each source is parsed by tree-sitter, and its syntax tree
    is turned into facts such as `node(3)`, `type(3, "rule")` and
@@ -42,4 +42,4 @@ c.
   compiling away the pools of clingo programs.
 
 !!! info
-    *aspen* is part of the [Potassco](https://potassco.org) suite.
+    *aspen-tree* is part of the [Potassco](https://potassco.org) suite.

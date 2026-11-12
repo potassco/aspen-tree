@@ -16,8 +16,8 @@ dynamic = ["version"]
 readme = "README.md"
 
 [project.urls]
-Homepage = "https://github.com/potassco/aspen"
-Documentation = "https://docs.potassco.org/aspen/"
+Homepage = "https://github.com/potassco/aspen-tree"
+Documentation = "https://docs.potassco.org/aspen-tree/"
 
 [project.optional-dependencies]
 format = ["black", "isort", "autoflake"]
