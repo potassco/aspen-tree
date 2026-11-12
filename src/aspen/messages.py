@@ -44,6 +44,19 @@ def _node_text(source: Source, node: ts.Node) -> str:
     return source.source_bytes[node.start_byte : node.end_byte].decode(source.encoding)
 
 
+def _depth_below(node: ts.Node, ancestor: ts.Node) -> Optional[int]:
+    """The number of steps from node up to ancestor, or None if
+    ancestor is not node or one of its ancestors."""
+    depth = 0
+    current: Optional[ts.Node] = node
+    while current is not None:
+        if current == ancestor:
+            return depth
+        current = current.parent
+        depth += 1
+    return None
+
+
 class NodeFormatter:
     """Renders templates and messages about nodes, using locate_node
     to find the source and tree-sitter node of a node(Id) symbol
@@ -103,6 +116,12 @@ class NodeFormatter:
         - format(S, L) and join(S, L): the format string S with the
           templates of the list L inserted, or the templates of the
           list L joined by S;
+        - edited(B, E): the text of B, which is node(N) or
+          original(node(N)), with the edits E applied, without
+          changing the source. E is an edit or a list of edits of
+          the form replace(node(M), T), append(node(M), T) or
+          prepend(node(M), T), where M is N or a descendant of N, see
+          _edited_text;
         - syntax_error(node(N)): a description of the syntax error
           at node N.
         """
@@ -131,6 +150,8 @@ class NodeFormatter:
                 if name == "format":
                     return args[0].string.format(*insert_strs)
                 return args[0].string.join(insert_strs)
+            if arity == 2 and name == "edited":
+                return self._edited_text(symb, args[0], args[1])
             if arity == 1 and name == "syntax_error" and args[0].match("node", 1):
                 source, node = self._locate_template_node(args[0], self._locate_node)
                 language = source.parser.language
@@ -143,6 +164,97 @@ class NodeFormatter:
                     source_str(source),
                 )
         raise ValueError(f"Symbol {symb} could not be converted to string.")
+
+    def _edited_text(self, symb: Symbol, base: Symbol, edits_symb: Symbol) -> str:
+        """Convert the template symbol edited(base, edits_symb) to
+        python str, by splicing the texts of the edits into the text
+        of the base node.
+
+        Like edits of the source, each node may have at most one edit
+        of each kind, and the replacement of a node comes before the
+        text prepended and appended to it. A replaced node must not
+        contain the target of another edit, as the replacement would
+        overwrite its text.
+        """
+        if base.match("node", 1):
+            node_symb, locate_node = base, self._locate_node
+        elif base.match("original", 1) and base.arguments[0].match("node", 1):
+            node_symb, locate_node = base.arguments[0], self._locate_original_node
+        else:
+            raise ValueError(f"Symbol {symb} could not be converted to string.")
+        source, base_node = self._locate_template_node(node_symb, locate_node)
+        if edits_symb.match("", 2) or edits_symb.match("", 0):
+            edits = cons_list_symb2py(edits_symb)
+        else:
+            edits = [edits_symb]
+        # the edited targets with their depth below the base node
+        targets: dict[tuple[Symbol, str], tuple[ts.Node, int]] = {}
+        for edit in edits:
+            if (
+                edit.type != SymbolType.Function
+                or edit.name not in ("replace", "append", "prepend")
+                or len(edit.arguments) != 2
+                or not edit.arguments[0].match("node", 1)
+            ):
+                raise ValueError(
+                    f"Symbol {edit} in template {symb} is not an edit of a node."
+                )
+            target_symb = edit.arguments[0]
+            _, target = self._locate_template_node(target_symb, locate_node)
+            depth = _depth_below(target, base_node)
+            if depth is None:
+                raise ValueError(
+                    self.node_message(
+                        target_symb,
+                        f"Target of edit {edit} in template {symb} is not "
+                        f"inside the edited node {node_symb}.",
+                    )
+                )
+            if (target_symb, edit.name) in targets:
+                raise ValueError(
+                    self.node_message(
+                        target_symb,
+                        f"Multiple {edit.name} edits defined for node in "
+                        f"template {symb}, expected at most one.",
+                    )
+                )
+            targets[(target_symb, edit.name)] = (target, depth)
+        for (replaced_symb, name), (replaced, _) in targets.items():
+            if name != "replace":
+                continue
+            for (target_symb, _), (target, _) in targets.items():
+                # a depth of 0 is the replaced node itself
+                if _depth_below(target, replaced):
+                    raise ValueError(
+                        self.node_message(
+                            target_symb,
+                            f"Edit of node in template {symb} is inside the "
+                            f"node {replaced_symb}, which is replaced.",
+                        )
+                    )
+        # The texts to splice in, as (start, end, key, text), sorted so
+        # that at the same position, appends of nodes ending there come
+        # first (inner ones first), then prepends of nodes starting
+        # there (outer ones first), then the replacement of a node.
+        pieces: list[tuple[int, int, tuple[int, int], bytes]] = []
+        for edit in edits:
+            target, depth = targets[(edit.arguments[0], edit.name)]
+            text = bytes(self.template_symb2str(edit.arguments[1]), source.encoding)
+            if edit.name == "append":
+                pieces.append((target.end_byte, target.end_byte, (0, -depth), text))
+            elif edit.name == "prepend":
+                pieces.append((target.start_byte, target.start_byte, (1, depth), text))
+            else:
+                pieces.append((target.start_byte, target.end_byte, (2, 0), text))
+        pieces.sort(key=lambda piece: (piece[0], piece[2]))
+        source_bytes = source.source_bytes
+        cursor = base_node.start_byte
+        edited = b""
+        for start, end, _, text in pieces:
+            edited += source_bytes[cursor:start] + text
+            cursor = end
+        edited += source_bytes[cursor : base_node.end_byte]
+        return edited.decode(source.encoding)
 
     def _locate_template_node(
         self, symb: Symbol, locate_node: NodeLocator

@@ -344,6 +344,119 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             expected_sources=["a(1). a."],
         )
 
+    def test_transform_edited_compiles_pools(self) -> None:
+        """Test that edited templates allow replacing a rule with
+        variants of it that differ in a descendant, here compiling
+        away pools."""
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["a :- p(b;c), d.\nx :- q(1;2;3)."],
+            meta_files=[encoding_dir / "compile_pools.lp"],
+            expected_sources=[
+                "a :- p(b), d.\na :- p(c), d.\nx :- q(1).\nx :- q(2).\nx :- q(3)."
+            ],
+        )
+
+    def assert_prints_edited(
+        self, edits: str, expected: str, base: str = "node(R)"
+    ) -> None:
+        """Assert that printing edited(base, edits) for the source
+        x :- f(1), q. prints the expected text, without changing the
+        source. The base and edits may refer to the nodes R (the
+        rule), H (the head literal), F (the identifier f), O (the
+        opening parenthesis), N (the number 1) and D (the final
+        dot)."""
+        tree = AspenTree(default_language=clingo_lang)
+        tree.parse("x :- f(1), q.")
+        meta_str = (
+            'n(R, H, F, O, N, D) :- type(R, "rule"), child(R, H), field(H, "head"), '
+            'leaf_text(F, "f"), leaf_text(O, "("), leaf_text(N, "1"), '
+            'leaf_text(D, "."). '
+            f"aspen(print(edited({base}, {edits}))) :- n(R, H, F, O, N, D)."
+        )
+        with redirect_stdout(StringIO()) as buf:
+            tree.transform(meta_string=meta_str)
+        self.assertEqual(buf.getvalue(), expected + "\n")
+        source = tree.sources[Function("s", [Number(0)])]
+        self.assertEqual(source.source_bytes, b"x :- f(1), q.")
+
+    def test_transform_edited(self) -> None:
+        """Test that edited templates splice the texts of their edits
+        into the text of the node, without changing the source."""
+        self.assert_prints_edited('replace(node(N), "4")', "x :- f(4), q.")
+        self.assert_prints_edited("()", "x :- f(1), q.")
+        # all kinds of edits of the same node, in any order
+        self.assert_prints_edited(
+            '(append(node(N), "+2"), (replace(node(N), "4"), '
+            '(prepend(node(N), "3+"), ())))',
+            "x :- f(3+4+2), q.",
+        )
+        # at the same position, appends come first (inner ones
+        # first), then prepends (outer ones first)
+        self.assert_prints_edited(
+            '(prepend(node(H), "B"), (prepend(node(R), "A"), '
+            '(append(node(F), "1"), (prepend(node(O), "2"), '
+            '(append(node(R), "Z"), (append(node(D), "Y"), ()))))))',
+            "ABx :- f12(1), q.YZ",
+        )
+
+    def test_transform_edited_original(self) -> None:
+        """Test that edited templates are based on the current text of
+        a node, or on its original text if given, and that edited
+        nodes of the original text are taken from the original
+        source."""
+        meta_str = (
+            'n(R, A, B, C) :- in(R, B), leaf_text(A, "a"), leaf_text(B, "b"), '
+            'in(C, C0), leaf_text(C0, "c"). '
+            'in(R, R) :- type(R, "rule"). '
+            "in(R, M) :- in(R, N), child(N, M). "
+            'aspen(replace(node(B), "d")) :- n(R, A, B, C). '
+            'aspen(replace(node(C), edited({}, replace(node(A), "e")))) :- '
+            "n(R, A, B, C)."
+        )
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["a :- b. c."],
+            meta_string=meta_str.format("node(R)"),
+            expected_sources=["a :- d. e :- d."],
+        )
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["a :- b. c."],
+            meta_string=meta_str.format("original(node(R))"),
+            expected_sources=["a :- d. e :- b."],
+        )
+
+    def test_transform_edited_errors(self) -> None:
+        """Test the errors raised by invalid edited templates."""
+        with self.assertRaisesRegex(
+            ValueError,
+            r"^s\(0\):1:12-13: Target of edit replace\(node\(\d+\),\"\"\) in "
+            r"template edited\(node\(\d+\),replace\(node\(\d+\),\"\"\)\) is "
+            r"not inside the edited node node\(\d+\)\.\nx :- f\(1\), q\.\n",
+        ):
+            self.assert_prints_edited('replace(node(D), "")', "", base="node(H)")
+        with self.assertRaisesRegex(
+            ValueError, r"Multiple append edits defined for node in template"
+        ):
+            self.assert_prints_edited(
+                '(append(node(N), "2"), (append(node(N), "3"), ()))', ""
+            )
+        with self.assertRaisesRegex(
+            ValueError, r"s\(0\):1:7-8: Edit of node in template .* is inside the node"
+        ):
+            self.assert_prints_edited(
+                '(prepend(node(N), "2"), (replace(node(R), "3"), ()))', ""
+            )
+        with self.assertRaisesRegex(
+            ValueError, r"Symbol foo in template .* is not an edit of a node\."
+        ):
+            self.assert_prints_edited("foo", "")
+        with self.assertRaisesRegex(
+            ValueError, r"^Symbol edited\(foo,\(\)\) could not be converted"
+        ):
+            self.assert_prints_edited("()", "", base="foo")
+
     def test_transform_edit_target_not_a_node(self) -> None:
         """Test that an edit whose target is not wrapped in node(...)
         raises an error."""
