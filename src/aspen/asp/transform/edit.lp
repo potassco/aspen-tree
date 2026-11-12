@@ -29,7 +29,9 @@ aspen(item_in_template(Template, First)) :-
 aspen(item_in_template(Template, Template)) :-
   aspen(replace(Node, Template);append(Node, Template);prepend(Node, Template)).
 
-aspen(target(replace(N,S),N)) :- aspen(replace(N,S)).
+aspen(_edit_target(replace(node(N), S), N)) :- aspen(replace(node(N), S)).
+aspen(_edit_target(append(node(N), S), N)) :- aspen(append(node(N), S)).
+aspen(_edit_target(prepend(node(N), S), N)) :- aspen(prepend(node(N), S)).
 
 % aspen(comes_before(Edit',Edit)) means Edit' must occur before Edit
 % for the text replacement to be correct.
@@ -50,10 +52,20 @@ aspen(_insert_desc(InsertNode, Node')) :-
 aspen(_edit_insert_desc(Edit, Node)) :-
   aspen(_edit_insert(Edit, InsertNode)), aspen(_insert_desc(InsertNode, Node)).
 
-aspen(comes_before(replace(node(TargetNode), S'), Edit)) :-
+% A node inserted by a template has the text it has after all edits
+% of it and of its descendants, so these edits must come first.
+% Edits of the same node are excluded, as they are ordered below.
+aspen(comes_before(Inner, Edit)) :-
   aspen(_edit_insert_desc(Edit, TargetNode)),
-  aspen(replace(node(TargetNode), S')),
-  Edit != replace(node(TargetNode), S').
+  aspen(_edit_target(Inner, TargetNode)),
+  aspen(_edit_target(Edit, EditTarget)), EditTarget != TargetNode.
+
+% Text appended or prepended to a node becomes part of the node, so
+% replacing the node must come first, or it would overwrite the text.
+aspen(comes_before(replace(N, S), append(N, S'))) :-
+  aspen(replace(N, S)), aspen(append(N, S')).
+aspen(comes_before(replace(N, S), prepend(N, S'))) :-
+  aspen(replace(N, S)), aspen(prepend(N, S')).
 
 % query the paths of node ids that occur as targets or as inserts
 % in templates, so that they can be used by aspen to find the
@@ -70,3 +82,8 @@ aspen(item_in_template(Template, Template)) :-
      	exception(_, Template);exception(Template)).
 
 aspen(query(path_of_node(Node))) :- aspen(node_in_template(_, node(Node))).
+
+% inserts of original text create no dependencies between edits, as
+% they are converted to text from the sources before any edits
+aspen(query(path_of_node(Node))) :-
+  aspen(item_in_template(_, original(node(Node)))).

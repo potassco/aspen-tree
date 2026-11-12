@@ -7,16 +7,6 @@ import tree_sitter as ts
 from clingo.symbol import Symbol, SymbolType
 
 from aspen.source import Source, source_str
-from aspen.utils.symbol_dispatch import (
-    AllOf,
-    AnyOf,
-    At,
-    Func,
-    Str,
-    SymbolSpec,
-    Tup,
-    dispatch_symbols,
-)
 from aspen.utils.tree_sitter_utils import format_node_span, format_syntax_error
 
 NodeLocator = Callable[[Symbol], Optional[tuple[Source, ts.Node]]]
@@ -49,16 +39,21 @@ def loc_prefix(source: Source, node: ts.Node) -> str:
     return f"{source_str(source)}:{span_str}: "
 
 
+def _node_text(source: Source, node: ts.Node) -> str:
+    """The text of a node of a source."""
+    return source.source_bytes[node.start_byte : node.end_byte].decode(source.encoding)
+
+
 class NodeFormatter:
     """Renders templates and messages about nodes, using locate_node
     to find the source and tree-sitter node of a node(Id) symbol
     (which returns None if the symbol is not the identifier of a
-    node)."""
+    node), and locate_original_node to find them in the sources as
+    they were at the start of the current transformation step."""
 
-    def __init__(self, locate_node: NodeLocator):
+    def __init__(self, locate_node: NodeLocator, locate_original_node: NodeLocator):
         self._locate_node = locate_node
-        self._template_strs: list[str] = []
-        self._template_spec = self._build_template_spec()
+        self._locate_original_node = locate_original_node
 
     def node_message(self, node_symb: Symbol, text: str) -> str:
         """Message about the node with the given node(Id) symbol,
@@ -96,85 +91,66 @@ class NodeFormatter:
         return f"{edit_symb.name} {insert}"
 
     def template_symb2str(self, symb: Symbol) -> str:
-        """Convert template symbol to python str."""
+        """Convert template symbol to python str.
+
+        A template is a string, or one of:
+        - node(N): the current text of node N, i.e. including the
+          edits of it and its descendants applied so far (which the
+          transformation encoding orders before the edit using the
+          template);
+        - original(node(N)): the text of node N at the start of the
+          current transformation step, before any edits;
+        - format(S, L) and join(S, L): the format string S with the
+          templates of the list L inserted, or the templates of the
+          list L joined by S;
+        - syntax_error(node(N)): a description of the syntax error
+          at node N.
+        """
         if symb.type == SymbolType.String:
             return symb.string
-        # The actions of the template spec push the string of the
-        # matched symbol to the stack (after converting its inserts
-        # recursively, which push and pop their own strings).
-        num_results = len(self._template_strs)
-        dispatch_symbols([symb], self._template_spec)
-        if len(self._template_strs) == num_results:
-            raise ValueError(f"Symbol {symb} could not be converted to string.")
-        return self._template_strs.pop()
-
-    def _locate_template_node(self, symb: Symbol) -> tuple[Source, ts.Node]:
-        located = self._locate_node(symb)
-        if located is None:
-            raise ValueError(
-                f"Symbol {symb} could not be converted to string, "
-                "as it is not the identifier of a node."
-            )
-        return located
-
-    def _build_template_spec(self) -> SymbolSpec:
-        """Build the spec dispatching template symbols to the actions
-        converting them to strings, see template_symb2str."""
-
-        def _node(symb: Symbol) -> None:
-            source, node = self._locate_template_node(symb)
-            start, end = node.start_byte, node.end_byte
-            self._template_strs.append(
-                source.source_bytes[start:end].decode(source.encoding)
-            )
-
-        def _format(symb: Symbol) -> None:
-            format_string = symb.arguments[0].string
-            inserts = cons_list_symb2py(symb.arguments[1])
-            insert_strs = [self.template_symb2str(s) for s in inserts]
-            self._template_strs.append(format_string.format(*insert_strs))
-
-        def _join(symb: Symbol) -> None:
-            join_str = symb.arguments[0].string
-            inserts = cons_list_symb2py(symb.arguments[1])
-            insert_strs = [self.template_symb2str(s) for s in inserts]
-            self._template_strs.append(join_str.join(insert_strs))
-
-        def _syntax_error(symb: Symbol) -> None:
-            source, node = self._locate_template_node(symb.arguments[0])
-            language = source.parser.language
-            assert language is not None
-            self._template_strs.append(
-                format_syntax_error(
+        if symb.type == SymbolType.Function and symb.positive:
+            # accessing the attributes of a symbol is costly
+            # (relatively speaking), so each is accessed once
+            name = symb.name
+            args = symb.arguments
+            arity = len(args)
+            if arity == 1 and name == "node":
+                return _node_text(*self._locate_template_node(symb, self._locate_node))
+            if arity == 1 and name == "original" and args[0].match("node", 1):
+                return _node_text(
+                    *self._locate_template_node(args[0], self._locate_original_node)
+                )
+            if (
+                arity == 2
+                and name in ("format", "join")
+                and args[0].type == SymbolType.String
+                and (args[1].match("", 2) or args[1].match("", 0))
+            ):
+                inserts = cons_list_symb2py(args[1])
+                insert_strs = [self.template_symb2str(s) for s in inserts]
+                if name == "format":
+                    return args[0].string.format(*insert_strs)
+                return args[0].string.join(insert_strs)
+            if arity == 1 and name == "syntax_error" and args[0].match("node", 1):
+                source, node = self._locate_template_node(args[0], self._locate_node)
+                language = source.parser.language
+                assert language is not None
+                return format_syntax_error(
                     node,
                     source.source_bytes,
                     source.encoding,
                     language,
                     source_str(source),
                 )
-            )
+        raise ValueError(f"Symbol {symb} could not be converted to string.")
 
-        list_shape = AnyOf([At(1, Tup(2)), At(1, Tup(0))])
-        return AnyOf(
-            [
-                Func("node", 1, action=_node),
-                Func(
-                    "format",
-                    2,
-                    action=_format,
-                    shape=AllOf([At(0, Str()), list_shape]),
-                ),
-                Func(
-                    "join",
-                    2,
-                    action=_join,
-                    shape=AllOf([At(0, Str()), list_shape]),
-                ),
-                Func(
-                    "syntax_error",
-                    1,
-                    action=_syntax_error,
-                    shape=At(0, Func(name="node", arity=1)),
-                ),
-            ]
-        )
+    def _locate_template_node(
+        self, symb: Symbol, locate_node: NodeLocator
+    ) -> tuple[Source, ts.Node]:
+        located = locate_node(symb)
+        if located is None:
+            raise ValueError(
+                f"Symbol {symb} could not be converted to string, "
+                "as it is not the identifier of a node."
+            )
+        return located

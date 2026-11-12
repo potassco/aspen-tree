@@ -178,28 +178,88 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             expected_sources=["a :- d; c. :- d."],
         )
 
-    def test_transform_multiple_replacess_same_node(self) -> None:
+    def test_transform_multiple_edits_same_kind_same_node(self) -> None:
         """Test that transformation raises error when defining
-        multiple replacements for the same node."""
+        multiple edits of the same kind for the same node."""
         tree = AspenTree(default_language=clingo_lang)
         tree.parse("p(1).")
         meta_str = (
             'aspen(replace(node(N),format(S,()))) :- source_root(_,N); S=("a.";"b.").'
         )
         regex_str = (
-            r"^s\(0\):1:0-5: Multiple edits defined for node, expected one: "
-            r"replace with 'a\.'; replace with 'b\.'\.\np\(1\)\.\n\^\^\^\^\^$"
+            r"^s\(0\):1:0-5: Multiple replace edits defined for node, expected at "
+            r"most one: replace with 'a\.'; replace with 'b\.'\.\np\(1\)\.\n\^\^\^\^\^$"
         )
         with self.assertRaisesRegex(ValueError, regex_str):
             tree.transform(meta_string=meta_str)
-        # edits of other kinds, and those with templates that cannot
-        # be converted to text, are described as well
-        meta_str = (
-            'aspen(replace(node(N),"a.");append(node(N),foo(1))) :- source_root(_,N).'
+        # edits with templates that cannot be converted to text are
+        # described by their template
+        meta_str = 'aspen(append(node(N),("a.";foo(1)))) :- source_root(_,N).'
+        regex_str = (
+            r"Multiple append edits defined for node, expected at most one: "
+            r"append 'a\.'; append foo\(1\)\."
         )
-        regex_str = r"expected one: append foo\(1\); replace with 'a\.'\."
         with self.assertRaisesRegex(ValueError, regex_str):
             tree.transform(meta_string=meta_str)
+
+    def test_transform_edits_of_each_kind_same_node(self) -> None:
+        """Test that a node may have one edit of each kind, where the
+        replacement comes before the prepended and appended text,
+        regardless of the order the edits are found in."""
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["x :- f(1), q."],
+            meta_string=(
+                'aspen(append(node(N),"+2");prepend(node(N),"3+");replace(node(N),"4")) '
+                ':- leaf_text(N, "1").'
+            ),
+            expected_sources=["x :- f(3+4+2), q."],
+        )
+
+    def test_transform_insert_node_with_append(self) -> None:
+        """Test that a node inserted by a template includes the text
+        appended to it."""
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["a. b."],
+            meta_string=(
+                'aspen(append(node(A),"(1)")) :- leaf_text(A,"a"). '
+                'aspen(replace(node(B),format("{}",(node(A),())))) :- '
+                'leaf_text(A,"a"), leaf_text(B,"b").'
+            ),
+            expected_sources=["a(1). a(1)."],
+        )
+
+    def test_transform_insert_node_with_prepend_in_descendant(self) -> None:
+        """Test that a node inserted by a template includes the text
+        prepended to its descendants."""
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["a :- b. c."],
+            meta_string=(
+                'head_name(R,X) :- type(R,"rule"), child(R,H), field(H,"head"), '
+                "child(H,At), child(At,I), leaf_text(I,X). "
+                'aspen(prepend(node(At),"not ")) :- type(At,"symbolic_atom"), '
+                'child(At,I), leaf_text(I,"b"), child(L,At), type(L,"body_literal"). '
+                'aspen(replace(node(S),format("{}",(node(R),())))) :- '
+                'head_name(R,"a"), head_name(S,"c").'
+            ),
+            expected_sources=["a :- not b. a :- not b."],
+        )
+
+    def test_transform_append_inserting_node_with_append(self) -> None:
+        """Test that a node inserted by the template of an append
+        includes the text appended to it."""
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["a."],
+            meta_string=(
+                'aspen(append(node(A),"(1)")) :- leaf_text(A,"a"). '
+                'aspen(append(node(S),format(" {}.",(node(A),())))) :- '
+                'leaf_text(A,"a"), type(S,"rule").'
+            ),
+            expected_sources=["a(1). a(1)."],
+        )
 
     def test_transform_spanning_ancestor(self) -> None:
         """Test that transformation succeeds when editing a node which
@@ -253,6 +313,36 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
         regex = r"Symbol node\(999\) could not be converted to string, as it is not"
         with self.assertRaisesRegex(ValueError, regex):
             tree.transform(meta_string='aspen(print(format("{}", (node(999), ())))).')
+        with self.assertRaisesRegex(ValueError, regex):
+            tree.transform(meta_string="aspen(print(original(node(999)))).")
+
+    def test_transform_swap_with_original(self) -> None:
+        """Test that two nodes can be swapped by inserting their
+        original text, which creates no dependencies between edits."""
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["a. b."],
+            meta_string=(
+                'n(A,B) :- leaf_text(A,"a"), leaf_text(B,"b"). '
+                'aspen(replace(node(A),format("{}",(original(node(B)),())))) :- n(A,B). '
+                'aspen(replace(node(B),join("",(original(node(A)),())))) :- n(A,B).'
+            ),
+            expected_sources=["b. a."],
+        )
+
+    def test_transform_insert_original_of_node_with_append(self) -> None:
+        """Test that the original text of a node inserted by a template
+        does not include the text appended to it."""
+        self.assert_transform_isomorphic(
+            language=clingo_lang,
+            sources=["a. b."],
+            meta_string=(
+                'aspen(append(node(A),"(1)")) :- leaf_text(A,"a"). '
+                "aspen(replace(node(B),original(node(A)))) :- "
+                'leaf_text(A,"a"), leaf_text(B,"b").'
+            ),
+            expected_sources=["a(1). a."],
+        )
 
     def test_transform_edit_target_not_a_node(self) -> None:
         """Test that an edit whose target is not wrapped in node(...)
@@ -337,7 +427,7 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             ' :- leaf_text(N, "a"), leaf_text(M, "b").'
         )
         error_regex = (
-            r"Transformation edits define cyclic dependencies via format strings\. "
+            r"Transformation edits define cyclic dependencies\. "
             r"One such cycle:\n"
             r"s\(0\):1:(0-1|5-6): replace with '[ab]'\na :- b\.\n *\^\n"
             r"which must be applied before\n"

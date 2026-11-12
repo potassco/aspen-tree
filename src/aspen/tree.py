@@ -1,5 +1,6 @@
 """Module defining the AspenTree class."""
 
+import dataclasses
 import logging
 from collections import defaultdict
 from graphlib import CycleError, TopologicalSorter
@@ -19,7 +20,6 @@ from aspen.messages import NodeFormatter, cons_list_symb2py
 from aspen.source import Source, StringEncoding, source_str
 from aspen.utils.include_resolver import resolve_meta_encoding_file, rewrite_includes
 from aspen.utils.log import get_clingo_logger, get_logger, get_ts_logger
-from aspen.utils.symbol_dispatch import AnyOf, At, Func, dispatch_symbols
 from aspen.utils.tree_sitter_utils import (
     Change,
     calc_edit_range,
@@ -124,7 +124,10 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         self._node_id2source_path: dict[Symbol, Symbol] = {}
         self._pending_source_changes: dict[Symbol, list[Change]] = {}
         self._skip_final_re_reify = False
-        self._formatter = NodeFormatter(self._locate_node)
+        # the sources as they were at the start of the current
+        # transformation step, for templates inserting original text
+        self._original_sources: dict[Symbol, Source] = {}
+        self._formatter = NodeFormatter(self._locate_node, self._locate_original_node)
 
     @property
     def facts(self) -> List[Symbol]:
@@ -166,8 +169,13 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             path_symb = Tuple_([Number(idx), path_symb])
         return path_symb
 
-    def _source_path_symb2ts(self, source_path_symb: Symbol) -> tuple[Source, ts.Node]:
-        """Retrieve tree-sitter node from node identifier symbol."""
+    def _source_path_symb2ts(
+        self,
+        source_path_symb: Symbol,
+        sources: Optional[dict[Symbol, Source]] = None,
+    ) -> tuple[Source, ts.Node]:
+        """Retrieve tree-sitter node from node identifier symbol, from
+        the given sources (by default, the current ones)."""
         source_symb, path_symb = (
             source_path_symb.arguments[0],
             source_path_symb.arguments[1],
@@ -176,8 +184,10 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
             "Retrieving node from tree of source %s at path %s.", source_symb, path_symb
         )
         path_list = self._path_symb2py(path_symb)
+        if sources is None:
+            sources = self.sources
         try:
-            source = self.sources[source_symb]
+            source = sources[source_symb]
         except KeyError as exc:
             raise ValueError(f"Unknown source symbol: {source_symb}.") from exc
         tree = source.tree
@@ -199,6 +209,16 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         if source_path is None:
             return None
         return self._source_path_symb2ts(source_path)
+
+    def _locate_original_node(
+        self, node_symb: Symbol
+    ) -> Optional[tuple[Source, ts.Node]]:
+        """Like _locate_node, but retrieves the node from the sources
+        as they were at the start of the current transformation step."""
+        source_path = self._node_id2source_path.get(node_symb)
+        if source_path is None:
+            return None
+        return self._source_path_symb2ts(source_path, self._original_sources)
 
     def parse(
         self,
@@ -488,7 +508,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                     self._re_reify_changed_subtrees(self._pending_source_changes, control)
                     self._pending_source_changes = {}
 
-    def _on_transform_model(  # pylint: disable=too-many-statements
+    def _on_transform_model(  # pylint: disable=too-many-branches,too-many-statements
         self, model: Model
     ) -> Literal[False]:
         """Model callback for transformation. Returns False as we only
@@ -498,20 +518,17 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 ("Found stable model with shown atoms: %s"),
                 " ".join([str(s) + "." for s in model.symbols(shown=True)]),
             )
+        # copying a tree is cheap, as the copy shares its nodes with
+        # the original until either is edited
+        self._original_sources = {
+            symb: dataclasses.replace(source, tree=source.tree.copy())
+            for symb, source in self.sources.items()
+        }
         edit_symbols: list[Symbol] = []
         next_transform_symbols: list[Symbol] = []
         deps: defaultdict[Symbol, list[Symbol]] = defaultdict(list)
         error_msgs: list[str] = []
         edited_sources: set[Symbol] = set()
-
-        def _record_comes_before(symb: Symbol) -> None:
-            before, after = symb.arguments
-            deps[after].append(before)
-
-        def _record_path_of_node(symb: Symbol) -> None:
-            path_of_node, path = symb.arguments
-            node_id = path_of_node.arguments[0]
-            self._node_id2source_path[Function("node", [node_id])] = path
 
         def _emit_log(
             symb: Symbol, log_level_symb: Symbol, loc_prefix: str, text: str
@@ -603,39 +620,47 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         # Logs, prints and exceptions may refer to nodes, so they are
         # processed (in order) after the paths of all nodes are recorded.
         deferred: list[tuple[Callable[[Symbol], None], Symbol]] = []
-
-        def _defer(action: Callable[[Symbol], None]) -> Callable[[Symbol], None]:
-            return lambda symb: deferred.append((action, symb))
-
-        spec = Func(
-            "aspen",
-            1,
-            shape=At(
-                0,
-                AnyOf(
-                    [
-                        Func("replace", 2, action=edit_symbols.append),
-                        Func("append", 2, action=edit_symbols.append),
-                        Func("prepend", 2, action=edit_symbols.append),
-                        Func("comes_before", 2, action=_record_comes_before),
-                        Func("next_program", 2, action=next_transform_symbols.append),
-                        Func("log", 2, action=_defer(_process_log_no_loc)),
-                        Func("log", 3, action=_defer(_process_log_with_loc)),
-                        Func("print", 1, action=_defer(_print_direct)),
-                        Func("print", 2, action=_defer(_print_to_target)),
-                        Func("exception", 1, action=_defer(_process_exception_no_loc)),
-                        Func("exception", 2, action=_defer(_process_exception_with_loc)),
-                        Func(
-                            "return",
-                            2,
-                            action=_record_path_of_node,
-                            shape=At(0, Func(name="path_of_node", arity=1)),
-                        ),
-                    ]
-                ),
-            ),
-        )
-        dispatch_symbols(model.symbols(terms=True), spec)
+        for symb in model.symbols(terms=True):
+            # accessing the attributes of a symbol is costly (relatively
+            # speaking), so each is accessed once
+            if (
+                symb.type != SymbolType.Function
+                or not symb.positive
+                or symb.name != "aspen"
+            ):  # nocoverage
+                continue
+            symb_args = symb.arguments
+            if len(symb_args) != 1:  # nocoverage
+                continue
+            arg = symb_args[0]
+            if arg.type != SymbolType.Function or not arg.positive:  # nocoverage
+                continue
+            arg_name = arg.name
+            arg_args = arg.arguments
+            arg_arity = len(arg_args)
+            if arg_arity == 2 and arg_name in ("replace", "append", "prepend"):
+                edit_symbols.append(arg)
+            elif arg_arity == 2 and arg_name == "comes_before":
+                deps[arg_args[1]].append(arg_args[0])
+            elif arg_arity == 2 and arg_name == "next_program":
+                next_transform_symbols.append(arg)
+            elif arg_arity == 2 and arg_name == "log":
+                deferred.append((_process_log_no_loc, arg))
+            elif arg_arity == 3 and arg_name == "log":
+                deferred.append((_process_log_with_loc, arg))
+            elif arg_arity == 1 and arg_name == "print":
+                deferred.append((_print_direct, arg))
+            elif arg_arity == 2 and arg_name == "print":
+                deferred.append((_print_to_target, arg))
+            elif arg_arity == 1 and arg_name == "exception":
+                deferred.append((_process_exception_no_loc, arg))
+            elif arg_arity == 2 and arg_name == "exception":
+                deferred.append((_process_exception_with_loc, arg))
+            elif arg_arity == 2 and arg_name == "return":
+                query = arg_args[0]
+                if query.match("path_of_node", 1):
+                    node_symb = Function("node", query.arguments)
+                    self._node_id2source_path[node_symb] = arg_args[1]
         for action, symb in deferred:
             action(symb)
         if len(next_transform_symbols) > 1:
@@ -688,27 +713,28 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         target node of any given derived edit fact.
 
         """
-        # TODO: check for duplicate append symbols as well.
-        target2edits: defaultdict[Symbol, list[Symbol]] = defaultdict(list)
+        # a node may have one edit of each kind (replace, append, prepend)
+        kind2edits: defaultdict[tuple[Symbol, str], list[Symbol]] = defaultdict(list)
         for edit in edit_symbols:
-            target2edits[edit.arguments[0]].append(edit)
+            kind2edits[(edit.arguments[0], edit.name)].append(edit)
         dupes = sorted(
-            (target for target, edits in target2edits.items() if len(edits) > 1),
-            key=self._formatter.node_position,
+            (kind for kind, edits in kind2edits.items() if len(edits) > 1),
+            key=lambda kind: (self._formatter.node_position(kind[0]), kind[1]),
         )
         if len(dupes) > 0:
             messages = [
                 self._formatter.node_message(
                     target,
-                    "Multiple edits defined for node, expected one: "
+                    f"Multiple {name} edits defined for node, expected at most one: "
                     + "; ".join(
                         sorted(
-                            self._formatter.describe_edit(e) for e in target2edits[target]
+                            self._formatter.describe_edit(e)
+                            for e in kind2edits[(target, name)]
                         )
                     )
                     + ".",
                 )
-                for target in dupes
+                for target, name in dupes
             ]
             raise ValueError("\n".join(messages))
         for s in edit_symbols:
@@ -726,7 +752,7 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
                 for edit in exc.args[1]
             )
             msg = (
-                "Transformation edits define cyclic dependencies via format strings. "
+                "Transformation edits define cyclic dependencies. "
                 f"One such cycle:\n{cycle_str}"
             )
             raise ValueError(msg) from exc
