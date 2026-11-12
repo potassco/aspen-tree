@@ -1,5 +1,7 @@
 % Compile away all pools of a clingo program in one step, in the same
-% way as clingo itself unpools programs.
+% way as clingo itself unpools programs. Apply it e.g. via
+%   aspen transform prg.lp -l clingo \
+%     --meta-string '#include "@aspen/clingo/compile_pools.lp".'
 %
 % Each pool belongs to a scope, which is replaced by its variants,
 % one for each combination of alternatives of its units:

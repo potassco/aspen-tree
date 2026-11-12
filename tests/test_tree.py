@@ -351,7 +351,7 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
         self.assert_transform_isomorphic(
             language=clingo_lang,
             sources=["a :- p(b;c), d.\nx :- q(1;2;3)."],
-            meta_files=[encoding_dir / "compile_pools.lp"],
+            meta_string='#include "@aspen/clingo/compile_pools.lp".',
             expected_sources=[
                 "a :- p(b), d.\na :- p(c), d.\nx :- q(1).\nx :- q(2).\nx :- q(3)."
             ],
