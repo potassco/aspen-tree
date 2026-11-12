@@ -152,19 +152,21 @@ class NodeFormatter:
         first_symb, last_symb = target_symb.arguments
         source, first = self._locate_template_node(first_symb, locate_node)
         _, last = self._locate_template_node(last_symb, locate_node)
-        nodes = [first]
-        while nodes[-1] != last:
-            sibling = nodes[-1].next_sibling
-            if sibling is None:
-                raise ValueError(
-                    self.node_message(
-                        first_symb,
-                        f"Invalid span {target_symb}: {last_symb} is not "
-                        f"{first_symb} or a later sibling of it.",
-                    )
-                )
-            nodes.append(sibling)
-        return source, nodes
+        # The siblings are taken from the children of the parent, as
+        # next_sibling skips nodes of zero width, such as empty pool
+        # items.
+        siblings = [first] if first.parent is None else first.parent.children
+        start = siblings.index(first)
+        for end in range(start, len(siblings)):
+            if siblings[end] == last:
+                return source, siblings[start : end + 1]
+        raise ValueError(
+            self.node_message(
+                first_symb,
+                f"Invalid span {target_symb}: {last_symb} is not "
+                f"{first_symb} or a later sibling of it.",
+            )
+        )
 
     def describe_edit(self, edit_symb: Symbol) -> str:
         """Describe an edit symbol by its kind and the text it inserts

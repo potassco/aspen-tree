@@ -17,10 +17,12 @@
 % conditional literal chooses an alternative of its literal for each
 % copy.
 %
-% The alternatives of pool items, conditions and literals (holders)
-% choose an alternative for each of their slots: the pools directly
-% nested in them, and for pool items, the other items and separators
-% of the pool, whose only alternative is to remove them.
+% An alternative of a pool replaces the span of its items (from the
+% first to the last item, including the separators) by one of them,
+% where an alternative is chosen for each pool directly nested in it.
+% More generally, the alternatives of pool items, conditions and
+% literals (holders) choose an alternative for each pool directly
+% nested in them.
 %
 % Lists are built by recursion over the ranks of their elements, by
 % prepending single elements. To keep the encoding stratified (which
@@ -34,8 +36,7 @@
 pool_type("symbolic_atom";"function";"external_function";"theory_atom";"tuple";"abs").
 arg_pool_type("symbolic_atom";"function";"external_function";"theory_atom").
 
-pool_separator(P, S) :- type(P, T), pool_type(T), child(P, S), leaf_text(S, ";").
-pool(P) :- pool_separator(P, _).
+pool(P) :- type(P, T), pool_type(T), child(P, S), leaf_text(S, ";").
 
 % the items of argument pools are their arguments, the items of tuples
 % and absolute values are their children other than delimiters
@@ -46,48 +47,46 @@ pool_item(P, I) :-
   pool(P), type(P, ("tuple";"abs")), child(P, I),
   #false : leaf_text(I, ("(";")";"|";";")).
 
+% the span of the items of a pool, between its opening and closing
+% delimiters
+items_span(P, span(node(F), node(L))) :-
+  pool_item(P, F), next_sibling(O, F), leaf_text(O, ("(";"|")),
+  pool_item(P, L), next_sibling(L, C), leaf_text(C, (")";"|")).
+
 % conditional literals, their conditions and literals
 condition(L, C) :- type(L, "conditional_literal"), child(L, C), field(C, "condition").
 literal(L, A) :- type(L, "conditional_literal"), child(L, A), field(A, "literal").
 
-% holders and their slots
+% holders and the pools directly nested in them (an item may be a pool
+% itself)
 
 holder(I) :- pool_item(_, I).
 holder(C) :- condition(_, C).
 holder(A) :- literal(L, A), pooled(L).
 
-% the pools directly nested in a holder (an item may be a pool itself)
 below(H, H) :- holder(H), not pool(H).
 below(H, N') :- below(H, N), child(N, N'), not pool(N').
 nested(H, H) :- holder(H), pool(H).
 nested(H, Q) :- below(H, N), child(N, Q), pool(Q).
 
-% Choosing an item of a pool removes the separators and the other
-% items, and if the chosen item of an argument pool is empty, the
-% parentheses (as e.g. @f() is not allowed).
-removed(I, S) :- pool_item(P, I), pool_separator(P, S).
-removed(I, I') :- pool_item(P, I), pool_item(P, I'), I != I'.
-removed(I, N) :-
-  pool_item(P, I), type(I, "empty_pool_item"),
-  type(P, T), arg_pool_type(T), child(P, N), leaf_text(N, ("(";")")).
-
-slot(H, N) :- removed(H, N).
-slot(H, Q) :- nested(H, Q).
-slot_rank(H, S, J) :- slot(H, S), J = #count{ S' : slot(H, S'), S' < S }.
-num_slots(H, M) :- holder(H), M = #count{ S : slot(H, S) }.
-
 % the alternatives of holders as lists of edits, with ranks to order them
 
-option(H, N, replace(node(N), ""), ()) :- removed(H, N).
-option(H, Q, Edit, Rank) :- nested(H, Q), pool_alternative(Q, Edit, Rank).
+nested_rank(H, Q, J) :- nested(H, Q), J = #count{ Q' : nested(H, Q'), Q' < Q }.
+num_nested(H, M) :- holder(H), M = #count{ Q : nested(H, Q) }.
 
 partial_alternative(H, 0, (), ()) :- holder(H).
 partial_alternative(H, J+1, (Edit, Edits), (Rank, R)) :-
-  partial_alternative(H, J, Edits, Rank), slot_rank(H, S, J), option(H, S, Edit, R).
-alternative(H, Edits, Rank) :- partial_alternative(H, M, Edits, Rank), num_slots(H, M).
+  partial_alternative(H, J, Edits, Rank), nested_rank(H, Q, J), pool_alternative(Q, Edit, R).
+alternative(H, Edits, Rank) :- partial_alternative(H, M, Edits, Rank), num_nested(H, M).
 
-pool_alternative(P, replace(node(P), mutate(node(P), Edits)), (I, Rank)) :-
-  pool_item(P, I), alternative(I, Edits, Rank).
+% Choosing an empty item of an argument pool removes the parentheses as
+% well (as e.g. @f() is not allowed).
+pool_alternative(P, replace(Span, mutate(node(I), Edits)), (I, Rank)) :-
+  pool_item(P, I), items_span(P, Span), alternative(I, Edits, Rank),
+  #false : type(I, "empty_pool_item"), type(P, T), arg_pool_type(T).
+pool_alternative(P, replace(span(node(O), node(C)), ""), (I, ())) :-
+  pool_item(P, I), type(I, "empty_pool_item"), type(P, T), arg_pool_type(T),
+  child(P, O), leaf_text(O, "("), child(P, C), leaf_text(C, ")").
 
 % the alternatives of conditional literals with pooled conditions
 

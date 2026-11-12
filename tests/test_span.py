@@ -147,3 +147,22 @@ class TestSpan(AspenTestCase):
                 tree.parse("a :- b, c, d.")
                 with self.assertRaisesRegex(ValueError, regex):
                     tree.transform(meta_string=LITS + meta_str)
+
+    def test_transform_span_zero_width_node(self) -> None:
+        """Test spans starting or ending with a node of zero width, such
+        as an empty pool item, which tree-sitter's next_sibling skips."""
+        nodes = (
+            'type(E, "empty_pool_item"), type(T, "tuple"), child(T, E), '
+            'type(N, "number"), child(T, N)'
+        )
+        for source, span in [
+            ("p((1;)).", "span(node(N), node(E))"),
+            ("p((;1)).", "span(node(E), node(N))"),
+        ]:
+            with self.subTest(source=source):
+                self.assert_transform_isomorphic(
+                    language=clingo_lang,
+                    sources=[source],
+                    meta_string=f'aspen(replace({span}, "x")) :- {nodes}.',
+                    expected_sources=["p((x))."],
+                )
