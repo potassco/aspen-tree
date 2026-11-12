@@ -84,6 +84,7 @@ markdown_extensions:
         custom_icons:
           - _custom/overrides/.icons
   - attr_list
+  - def_list
   - md_in_html
   - pymdownx.blocks.caption
   - pymdownx.snippets
@@ -120,8 +121,10 @@ nav:
   - Examples: examples/index.md
   - Reference:
     - reference/index.md
-    - Problem: reference/problem/index.md
-    - Encodings: reference/encodings/index.md
+    - Command line interface: reference/cli.md
+    - Fact representation: reference/facts.md
+    - Meta-encodings: reference/transformations.md
+    - Bundled encodings: reference/encodings/index.md
     - API: reference/api/index.md
   - Community:
     - community/index.md

@@ -344,8 +344,8 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             expected_sources=["a(1). a."],
         )
 
-    def test_transform_edited_compiles_pools(self) -> None:
-        """Test that edited templates allow replacing a rule with
+    def test_transform_mutate_compiles_pools(self) -> None:
+        """Test that mutate templates allow replacing a rule with
         variants of it that differ in a descendant, here compiling
         away pools."""
         self.assert_transform_isomorphic(
@@ -357,10 +357,10 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             ],
         )
 
-    def assert_prints_edited(
+    def assert_prints_mutated(
         self, edits: str, expected: str, base: str = "node(R)"
     ) -> None:
-        """Assert that printing edited(base, edits) for the source
+        """Assert that printing mutate(base, edits) for the source
         x :- f(1), q. prints the expected text, without changing the
         source. The base and edits may refer to the nodes R (the
         rule), H (the head literal), F (the identifier f), O (the
@@ -372,7 +372,7 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             'n(R, H, F, O, N, D) :- type(R, "rule"), child(R, H), field(H, "head"), '
             'leaf_text(F, "f"), leaf_text(O, "("), leaf_text(N, "1"), '
             'leaf_text(D, "."). '
-            f"aspen(print(edited({base}, {edits}))) :- n(R, H, F, O, N, D)."
+            f"aspen(print(mutate({base}, {edits}))) :- n(R, H, F, O, N, D)."
         )
         with redirect_stdout(StringIO()) as buf:
             tree.transform(meta_string=meta_str)
@@ -380,28 +380,28 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
         source = tree.sources[Function("s", [Number(0)])]
         self.assertEqual(source.source_bytes, b"x :- f(1), q.")
 
-    def test_transform_edited(self) -> None:
-        """Test that edited templates splice the texts of their edits
+    def test_transform_mutate(self) -> None:
+        """Test that mutate templates splice the texts of their edits
         into the text of the node, without changing the source."""
-        self.assert_prints_edited('replace(node(N), "4")', "x :- f(4), q.")
-        self.assert_prints_edited("()", "x :- f(1), q.")
+        self.assert_prints_mutated('replace(node(N), "4")', "x :- f(4), q.")
+        self.assert_prints_mutated("()", "x :- f(1), q.")
         # all kinds of edits of the same node, in any order
-        self.assert_prints_edited(
+        self.assert_prints_mutated(
             '(append(node(N), "+2"), (replace(node(N), "4"), '
             '(prepend(node(N), "3+"), ())))',
             "x :- f(3+4+2), q.",
         )
         # at the same position, appends come first (inner ones
         # first), then prepends (outer ones first)
-        self.assert_prints_edited(
+        self.assert_prints_mutated(
             '(prepend(node(H), "B"), (prepend(node(R), "A"), '
             '(append(node(F), "1"), (prepend(node(O), "2"), '
             '(append(node(R), "Z"), (append(node(D), "Y"), ()))))))',
             "ABx :- f12(1), q.YZ",
         )
 
-    def test_transform_edited_original(self) -> None:
-        """Test that edited templates are based on the current text of
+    def test_transform_mutate_original(self) -> None:
+        """Test that mutate templates are based on the current text of
         a node, or on its original text if given, and that edited
         nodes of the original text are taken from the original
         source."""
@@ -411,7 +411,7 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             'in(R, R) :- type(R, "rule"). '
             "in(R, M) :- in(R, N), child(N, M). "
             'aspen(replace(node(B), "d")) :- n(R, A, B, C). '
-            'aspen(replace(node(C), edited({}, replace(node(A), "e")))) :- '
+            'aspen(replace(node(C), mutate({}, replace(node(A), "e")))) :- '
             "n(R, A, B, C)."
         )
         self.assert_transform_isomorphic(
@@ -427,35 +427,35 @@ class TestAspenTree(AspenTestCase):  # pylint: disable=too-many-public-methods
             expected_sources=["a :- d. e :- b."],
         )
 
-    def test_transform_edited_errors(self) -> None:
-        """Test the errors raised by invalid edited templates."""
+    def test_transform_mutate_errors(self) -> None:
+        """Test the errors raised by invalid mutate templates."""
         with self.assertRaisesRegex(
             ValueError,
             r"^s\(0\):1:12-13: Target of edit replace\(node\(\d+\),\"\"\) in "
-            r"template edited\(node\(\d+\),replace\(node\(\d+\),\"\"\)\) is "
-            r"not inside the edited node node\(\d+\)\.\nx :- f\(1\), q\.\n",
+            r"template mutate\(node\(\d+\),replace\(node\(\d+\),\"\"\)\) is "
+            r"not inside the mutated node node\(\d+\)\.\nx :- f\(1\), q\.\n",
         ):
-            self.assert_prints_edited('replace(node(D), "")', "", base="node(H)")
+            self.assert_prints_mutated('replace(node(D), "")', "", base="node(H)")
         with self.assertRaisesRegex(
             ValueError, r"Multiple append edits defined for node in template"
         ):
-            self.assert_prints_edited(
+            self.assert_prints_mutated(
                 '(append(node(N), "2"), (append(node(N), "3"), ()))', ""
             )
         with self.assertRaisesRegex(
             ValueError, r"s\(0\):1:7-8: Edit of node in template .* is inside the node"
         ):
-            self.assert_prints_edited(
+            self.assert_prints_mutated(
                 '(prepend(node(N), "2"), (replace(node(R), "3"), ()))', ""
             )
         with self.assertRaisesRegex(
             ValueError, r"Symbol foo in template .* is not an edit of a node\."
         ):
-            self.assert_prints_edited("foo", "")
+            self.assert_prints_mutated("foo", "")
         with self.assertRaisesRegex(
-            ValueError, r"^Symbol edited\(foo,\(\)\) could not be converted"
+            ValueError, r"^Symbol mutate\(foo,\(\)\) could not be converted"
         ):
-            self.assert_prints_edited("()", "", base="foo")
+            self.assert_prints_mutated("()", "", base="foo")
 
     def test_transform_edit_target_not_a_node(self) -> None:
         """Test that an edit whose target is not wrapped in node(...)
@@ -870,6 +870,29 @@ p(1
                 tree.transform(meta_files=[main_path])
                 self.assertEqual(buf.getvalue(), "a\n")
 
+    def test_transform_clingo_symbol_signature(self) -> None:
+        """Test that the bundled symbol_signature.lp of clingo computes
+        the signatures of atoms and functions with and without
+        arguments, both on its own and via include_all.lp."""
+        for include in [
+            "@aspen/clingo/derived_predicates/symbol_signature.lp",
+            "@aspen/clingo/include_all.lp",
+        ]:
+            with self.subTest(include=include):
+                tree = AspenTree(default_language=clingo_lang)
+                tree.parse("a(X,f(Y)) :- b, c(1).")
+                meta_str = (
+                    f'#include "{include}".\n'
+                    '#include "@aspen/clingo/derived_predicates/show_all.lp".\n'
+                    'aspen(print(format("{}/{}", (Name, (@symbol_to_string(A), ())))))'
+                    " :- symbol_signature(N, (Name, A))."
+                )
+                with redirect_stdout(StringIO()) as buf:
+                    tree.transform(meta_string=meta_str)
+                self.assertListEqual(
+                    sorted(buf.getvalue().splitlines()), ["a/2", "b/0", "c/1", "f/1"]
+                )
+
     def test_transform_print(self) -> None:
         """Test that aspen(print(String)) symbols derived during
         transformation prints String to stdout."""
@@ -935,6 +958,19 @@ p(1
             with redirect_stdout(StringIO()) as buf:
                 tree.write()
                 self.assertEqual(buf.getvalue(), "b.\nc.\n")
+            self.assertEqual(out_path.read_text(), "a.\n")
+
+    def test_write_keeps_final_newline(self) -> None:
+        """Test that write() adds no newline to text already ending
+        with one, both when printing and when writing to a file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.lp"
+            tree = AspenTree(default_language=clingo_lang)
+            tree.parse("a.\n", destination=out_path)
+            tree.parse("b.\n\n")
+            with redirect_stdout(StringIO()) as buf:
+                tree.write()
+                self.assertEqual(buf.getvalue(), "b.\n\n")
             self.assertEqual(out_path.read_text(), "a.\n")
 
     def test_write_after_transform_writes_transformed_text(self) -> None:

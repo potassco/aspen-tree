@@ -118,7 +118,7 @@ class TestMain(TestCaseWithRedirectedLogs):
         self.assertEqual(ret.source, ["foo.lp@clingo:foo.out.lp", "bar.lp:-"])
         self.assertEqual(ret.encoding, "utf16")
         self.assertEqual(ret.meta_file, [Path("a.lp"), Path("b.lp")])
-        self.assertEqual(ret.meta_string, 'aspen(print("hi")).')
+        self.assertEqual(ret.meta_string, ['aspen(print("hi")).'])
         self.assertEqual(ret.program, 'my_program("X")')
         self.assertEqual(ret.control_options, "-n 0 --stats")
         self.assertTrue(ret.facts)
@@ -198,6 +198,26 @@ class TestMain(TestCaseWithRedirectedLogs):
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn("error:", err_buf.getvalue())
         self.assertIn("tree_sitter_no_such_grammar", err_buf.getvalue())
+
+    def test_main_reports_clingo_errors_and_exits(self) -> None:
+        """Test that a meta-encoding clingo fails to ground is reported
+        on stderr, not as a raw traceback, and exits with a non-zero
+        status."""
+        err_buf = StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a.")
+            argv = ["aspen", "transform", str(source_path), "-l", "clingo"]
+            with (
+                patch.object(sys, "argv", argv + ["-s", "aspen(X) :- not a."]),
+                patch.object(sys, "stdout", StringIO()),
+                patch.object(sys, "stderr", err_buf),
+            ):
+                with self.assertRaises(SystemExit) as ctx:
+                    main()
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("error: grounding stopped because of errors", err_buf.getvalue())
+        self.assertNotIn("Traceback", err_buf.getvalue())
 
     def test_main_reports_traceback_on_debug(self) -> None:
         """Test that with --log debug, an error raised by the

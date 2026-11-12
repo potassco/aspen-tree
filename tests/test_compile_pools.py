@@ -1,5 +1,5 @@
 """Test the bundled encoding compiling away pools of clingo programs in
-one step, which exercises edited templates in many positions."""
+one step, which exercises mutate templates in many positions."""
 
 from unittest import TestCase
 

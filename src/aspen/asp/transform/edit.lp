@@ -26,25 +26,25 @@ aspen(list_in_template(Template, Rest)) :-
 aspen(item_in_template(Template, First)) :-
   aspen(list_in_template(Template, (First, Rest))).
 
-% In edited(Base, Edits), the base is inserted like any other item.
+% In mutate(Base, Edits), the base is inserted like any other item.
 % The edits are not applied to the source, so they are not ordered
 % with other edits; only their templates are items of the template.
 aspen(item_in_template(Template, Base)) :-
-  aspen(item_in_template(Template, edited(Base, Edits))).
+  aspen(item_in_template(Template, mutate(Base, Edits))).
 
-aspen(_edited_edits(Template, Edits)) :-
-  aspen(item_in_template(Template, edited(Base, Edits))).
-aspen(_edited_edits(Template, Rest)) :-
-  aspen(_edited_edits(Template, (First, Rest))).
+aspen(_mutate_edits(Template, Edits)) :-
+  aspen(item_in_template(Template, mutate(Base, Edits))).
+aspen(_mutate_edits(Template, Rest)) :-
+  aspen(_mutate_edits(Template, (First, Rest))).
 
-aspen(_edited_edit(Template, First)) :-
-  aspen(_edited_edits(Template, (First, Rest))).
-aspen(_edited_edit(Template, Edit)) :-
-  aspen(_edited_edits(Template, Edit)),
+aspen(_mutate_edit(Template, First)) :-
+  aspen(_mutate_edits(Template, (First, Rest))).
+aspen(_mutate_edit(Template, Edit)) :-
+  aspen(_mutate_edits(Template, Edit)),
   Edit=(replace(N, S);append(N, S);prepend(N, S)).
 
 aspen(item_in_template(Template, S)) :-
-  aspen(_edited_edit(Template, (replace(N, S);append(N, S);prepend(N, S)))).
+  aspen(_mutate_edit(Template, (replace(N, S);append(N, S);prepend(N, S)))).
 
 aspen(item_in_template(Template, Template)) :-
   aspen(replace(Node, Template);append(Node, Template);prepend(Node, Template)).
@@ -108,6 +108,6 @@ aspen(query(path_of_node(Node))) :- aspen(node_in_template(_, node(Node))).
 aspen(query(path_of_node(Node))) :-
   aspen(item_in_template(_, original(node(Node)))).
 
-% targets of the edits of edited(Base, Edits)
+% targets of the edits of mutate(Base, Edits)
 aspen(query(path_of_node(N))) :-
-  aspen(_edited_edit(_, (replace(node(N), S);append(node(N), S);prepend(node(N), S)))).
+  aspen(_mutate_edit(_, (replace(node(N), S);append(node(N), S);prepend(node(N), S)))).

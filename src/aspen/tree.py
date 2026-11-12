@@ -289,13 +289,16 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
     def write(self) -> None:
         """Write every source's current text to its associated
         destination, in the order they were parsed: a source with no
-        destination (the default) is printed to stdout."""
+        destination (the default) is printed to stdout. A newline is
+        added to text not ending with one."""
         for source in self.sources.values():
             text = source.source_bytes.decode(source.encoding)
+            if not text.endswith("\n"):
+                text += "\n"
             if source.destination is None:
-                print(text)
+                print(text, end="")
             else:
-                source.destination.write_text(text + "\n")
+                source.destination.write_text(text)
 
     def _reify_node_attrs(
         self, node: ts.Node, node_id: Symbol, encoding: StringEncoding

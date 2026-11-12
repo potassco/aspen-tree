@@ -1,6 +1,7 @@
-% we assume that there are no pools in the input
-% TODO: write a version that works with pools, or a transform encoding
-% that unpools a program.
+#include "./named_child_index.lp".
+
+% We assume that there are no pools in the input, which can be
+% compiled away first via @aspen/clingo/compile_pools.lp.
 symbol(N) :- type(N,("symbolic_atom";"function")).
 
 symbol_signature(N,(Name,Arity)) :-
@@ -12,4 +13,4 @@ symbol_signature(N,(Name,0)) :-
   symbol(N), #false: child(N,M), type(M,"terms");
   child(N,J), type(J,"identifier"), field(J,"name"), leaf_text(J,Name).
 
-#defined symbol_signature/3.
+#defined symbol_signature/2.

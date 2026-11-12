@@ -1,1 +1,1 @@
-#show symbol_signature/3.
+#show symbol_signature/2.

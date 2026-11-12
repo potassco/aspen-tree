@@ -512,7 +512,7 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
             source_path.write_text("a.")
             args = _transform_namespace(
                 source=[str(source_path)],
-                meta_string='aspen(print("hi")) :- #true.',
+                meta_string=['aspen(print("hi")) :- #true.'],
             )
             buf = io.StringIO()
             with redirect_stdout(buf):
@@ -538,6 +538,24 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
             with redirect_stdout(buf):
                 cmd_transform(args)
         self.assertEqual(buf.getvalue(), "a(X) :- b(X).\n")
+
+    def test_cmd_transform_multiple_meta_strings(self) -> None:
+        """Test that all of several -s/--meta-string options are
+        applied, not just the last one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a :- b.")
+            args = _transform_namespace(
+                source=[str(source_path)],
+                meta_string=[
+                    'aspen(replace(node(N), "c")) :- leaf_text(N, "a").',
+                    'aspen(replace(node(N), "d")) :- leaf_text(N, "b").',
+                ],
+            )
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cmd_transform(args)
+        self.assertEqual(buf.getvalue(), "c :- d.\n")
 
     def test_cmd_transform_multiple_sources_default_to_stdout(self) -> None:
         """Test that with no ':DEST' suffix at all, every source's
@@ -662,7 +680,7 @@ class TestCmdTransform(TestCaseWithRedirectedLogs):
         second time."""
         args = _transform_namespace(
             source=["-", "-"],
-            meta_string='aspen(print("hi")) :- #true.',
+            meta_string=['aspen(print("hi")) :- #true.'],
         )
         with self.assertRaisesRegex(ValueError, "stdin"):
             cmd_transform(args)

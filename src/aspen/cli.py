@@ -125,7 +125,7 @@ def _parse_program(program_arg: str) -> tuple[str, tuple[Symbol, ...]]:
 
 def cmd_reify(args: Namespace) -> None:
     """Run the `aspen reify` subcommand: parse one or more
-    SOURCE[@LANG] sources and print their combined reified ASP fact
+    `SOURCE[@LANG]` sources and print their combined reified ASP fact
     representation to stdout."""
     default_language = resolve_language(args.language) if args.language else None
     tree = AspenTree(
@@ -140,7 +140,7 @@ def cmd_reify(args: Namespace) -> None:
 
 def cmd_transform(args: Namespace) -> None:
     """Run the `aspen transform` subcommand: parse one or more
-    SOURCE[@LANG][:DEST] sources, apply a transformation
+    `SOURCE[@LANG][:DEST]` sources, apply a transformation
     meta-encoding to them, and either write out each source's
     transformed text to its own DEST (the default, via
     AspenTree.write()) or print the combined fact base to stdout
@@ -165,7 +165,8 @@ def cmd_transform(args: Namespace) -> None:
     _parse_sources(tree, specs)
     tree.transform(
         meta_files=args.meta_file,
-        meta_string=args.meta_string,
+        # the strings of all -s/--meta-string options, in order
+        meta_string="\n".join(args.meta_string) if args.meta_string else None,
         initial_program=_parse_program(args.program),
         control_options=_parse_control_options(args.control_options),
         # the facts are only needed after the transformation if they
@@ -180,5 +181,7 @@ def cmd_transform(args: Namespace) -> None:
 
 # the broad except in main() relies on this to tell genuine usage
 # errors apart from bugs - keep it in sync with what cmd_reify/
-# cmd_transform (and what they call) can actually raise for bad input
-CLI_ERRORS = (ValueError, OSError, TransformError)
+# cmd_transform (and what they call) can actually raise for bad input,
+# which includes the RuntimeError clingo raises for meta-encodings that
+# fail to parse or ground (after logging the reason)
+CLI_ERRORS = (ValueError, OSError, RuntimeError, TransformError)

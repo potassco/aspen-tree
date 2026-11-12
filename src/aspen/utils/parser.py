@@ -101,8 +101,12 @@ def _add_transform_parser(subparsers: "_SubParsersAction[ArgumentParser]") -> No
     transform_parser.add_argument(
         "-s",
         "--meta-string",
+        action="append",
         metavar="STRING",
-        help="inline meta-encoding to apply, in addition to any --meta-file",
+        help=(
+            "inline meta-encoding to apply, in addition to any --meta-file "
+            "(repeatable)"
+        ),
     )
     transform_parser.add_argument(
         "-p",

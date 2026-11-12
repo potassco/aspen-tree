@@ -86,7 +86,7 @@ partial_alternative(H, J+1, (Edit, Edits), (Rank, R)) :-
   partial_alternative(H, J, Edits, Rank), slot_rank(H, S, J), option(H, S, Edit, R).
 alternative(H, Edits, Rank) :- partial_alternative(H, M, Edits, Rank), num_slots(H, M).
 
-pool_alternative(P, replace(node(P), edited(node(P), Edits)), (I, Rank)) :-
+pool_alternative(P, replace(node(P), mutate(node(P), Edits)), (I, Rank)) :-
   pool_item(P, I), alternative(I, Edits, Rank).
 
 % the alternatives of conditional literals with pooled conditions
@@ -103,8 +103,8 @@ partial_copies(L, K+1, (Copy, Copies), (Rank, LitRank)) :-
   partial_copies(L, K, Copies, Rank), copy_rank(L, CondRank, K),
   condition(L, C), alternative(C, Cond, CondRank),
   literal(L, A), alternative(A, Lit, LitRank),
-  Copy = edited(node(L), (replace(node(C), edited(node(C), Cond)),
-                          (replace(node(A), edited(node(A), Lit)), ()))).
+  Copy = mutate(node(L), (replace(node(C), mutate(node(C), Cond)),
+                          (replace(node(A), mutate(node(A), Lit)), ()))).
 literal_alternative(L, replace(node(L), join("; ", Copies)), Rank) :-
   partial_copies(L, M, Copies, Rank), num_copies(L, M).
 
@@ -138,7 +138,7 @@ num_units(R, M) :- unit(R, _), M = #count{ U : unit(R, U) }.
 combination(R, 0, (), ()) :- unit(R, _).
 combination(R, J+1, (Edit, Edits), (Rank, A)) :-
   combination(R, J, Edits, Rank), unit_rank(R, U, J), unit_alternative(U, Edit, A).
-variant(R, edited(node(R), Edits), Rank) :- combination(R, M, Edits, Rank), num_units(R, M).
+variant(R, mutate(node(R), Edits), Rank) :- combination(R, M, Edits, Rank), num_units(R, M).
 
 % the list of variants is built from the last variant to the first
 variant_rank(R, V, J) :- variant(R, V, Rank), J = #count{ Rank' : variant(R, _, Rank'), Rank' > Rank }.

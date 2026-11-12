@@ -116,12 +116,12 @@ class NodeFormatter:
         - format(S, L) and join(S, L): the format string S with the
           templates of the list L inserted, or the templates of the
           list L joined by S;
-        - edited(B, E): the text of B, which is node(N) or
+        - mutate(B, E): the text of B, which is node(N) or
           original(node(N)), with the edits E applied, without
           changing the source. E is an edit or a list of edits of
           the form replace(node(M), T), append(node(M), T) or
           prepend(node(M), T), where M is N or a descendant of N, see
-          _edited_text;
+          _mutate_text;
         - syntax_error(node(N)): a description of the syntax error
           at node N.
         """
@@ -150,8 +150,8 @@ class NodeFormatter:
                 if name == "format":
                     return args[0].string.format(*insert_strs)
                 return args[0].string.join(insert_strs)
-            if arity == 2 and name == "edited":
-                return self._edited_text(symb, args[0], args[1])
+            if arity == 2 and name == "mutate":
+                return self._mutate_text(symb, args[0], args[1])
             if arity == 1 and name == "syntax_error" and args[0].match("node", 1):
                 source, node = self._locate_template_node(args[0], self._locate_node)
                 language = source.parser.language
@@ -165,8 +165,8 @@ class NodeFormatter:
                 )
         raise ValueError(f"Symbol {symb} could not be converted to string.")
 
-    def _edited_text(self, symb: Symbol, base: Symbol, edits_symb: Symbol) -> str:
-        """Convert the template symbol edited(base, edits_symb) to
+    def _mutate_text(self, symb: Symbol, base: Symbol, edits_symb: Symbol) -> str:
+        """Convert the template symbol mutate(base, edits_symb) to
         python str, by splicing the texts of the edits into the text
         of the base node.
 
@@ -187,7 +187,44 @@ class NodeFormatter:
             edits = cons_list_symb2py(edits_symb)
         else:
             edits = [edits_symb]
-        # the edited targets with their depth below the base node
+        targets = self._mutate_targets(symb, edits, node_symb, base_node, locate_node)
+        # The texts to splice in, as (start, end, key, text), sorted so
+        # that at the same position, appends of nodes ending there come
+        # first (inner ones first), then prepends of nodes starting
+        # there (outer ones first), then the replacements of nodes, where
+        # those of empty nodes come first.
+        pieces: list[tuple[int, int, tuple[int, int], bytes]] = []
+        for edit in edits:
+            target, depth = targets[(edit.arguments[0], edit.name)]
+            text = bytes(self.template_symb2str(edit.arguments[1]), source.encoding)
+            if edit.name == "append":
+                pieces.append((target.end_byte, target.end_byte, (0, -depth), text))
+            elif edit.name == "prepend":
+                pieces.append((target.start_byte, target.start_byte, (1, depth), text))
+            else:
+                pieces.append((target.start_byte, target.end_byte, (2, 0), text))
+        pieces.sort(key=lambda piece: (piece[0], piece[2], piece[1]))
+        source_bytes = source.source_bytes
+        cursor = base_node.start_byte
+        mutated = b""
+        for start, end, _, text in pieces:
+            mutated += source_bytes[cursor:start] + text
+            cursor = end
+        mutated += source_bytes[cursor : base_node.end_byte]
+        return mutated.decode(source.encoding)
+
+    def _mutate_targets(
+        self,
+        symb: Symbol,
+        edits: list[Symbol],
+        node_symb: Symbol,
+        base_node: ts.Node,
+        locate_node: NodeLocator,
+    ) -> dict[tuple[Symbol, str], tuple[ts.Node, int]]:
+        """Check the edits of the template symbol symb, which edits
+        the node node_symb (see _mutate_text), and return their
+        targets by node(Id) symbol and kind of edit, together with
+        their depth below the base node."""
         targets: dict[tuple[Symbol, str], tuple[ts.Node, int]] = {}
         for edit in edits:
             if (
@@ -207,7 +244,7 @@ class NodeFormatter:
                     self.node_message(
                         target_symb,
                         f"Target of edit {edit} in template {symb} is not "
-                        f"inside the edited node {node_symb}.",
+                        f"inside the mutated node {node_symb}.",
                     )
                 )
             if (target_symb, edit.name) in targets:
@@ -232,30 +269,7 @@ class NodeFormatter:
                             f"node {replaced_symb}, which is replaced.",
                         )
                     )
-        # The texts to splice in, as (start, end, key, text), sorted so
-        # that at the same position, appends of nodes ending there come
-        # first (inner ones first), then prepends of nodes starting
-        # there (outer ones first), then the replacements of nodes, where
-        # those of empty nodes come first.
-        pieces: list[tuple[int, int, tuple[int, int], bytes]] = []
-        for edit in edits:
-            target, depth = targets[(edit.arguments[0], edit.name)]
-            text = bytes(self.template_symb2str(edit.arguments[1]), source.encoding)
-            if edit.name == "append":
-                pieces.append((target.end_byte, target.end_byte, (0, -depth), text))
-            elif edit.name == "prepend":
-                pieces.append((target.start_byte, target.start_byte, (1, depth), text))
-            else:
-                pieces.append((target.start_byte, target.end_byte, (2, 0), text))
-        pieces.sort(key=lambda piece: (piece[0], piece[2], piece[1]))
-        source_bytes = source.source_bytes
-        cursor = base_node.start_byte
-        edited = b""
-        for start, end, _, text in pieces:
-            edited += source_bytes[cursor:start] + text
-            cursor = end
-        edited += source_bytes[cursor : base_node.end_byte]
-        return edited.decode(source.encoding)
+        return targets
 
     def _locate_template_node(
         self, symb: Symbol, locate_node: NodeLocator
