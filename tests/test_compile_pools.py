@@ -1,5 +1,5 @@
-"""Test the encoding compiling away pools of clingo programs, which
-exercises edited templates in many positions."""
+"""Test the encoding compiling away pools of clingo programs in one
+step, which exercises edited templates in many positions."""
 
 from unittest import TestCase
 
@@ -8,7 +8,7 @@ from clingo.symbol import Function, Number
 
 from aspen.tree import AspenTree
 
-from .common import clingo_lang, encoding_dir, input_dir
+from .common import clingo_lang, encoding_dir, input_dir, spy_re_reify
 
 # The lists whose order does not matter, which are sorted to compare
 # programs, as the encoding does not keep the order of clingo.
@@ -59,11 +59,14 @@ class TestCompilePools(TestCase):
     def test_compile_pools(self) -> None:
         """Test that compiling away the pools of a program gives the
         same statements as unpooling it by clingo, up to the order of
-        lists whose order does not matter."""
+        lists whose order does not matter, in a single transformation
+        step (i.e. re-reifying once)."""
         program = (input_dir / "pools.lp").read_text()
         tree = AspenTree(default_language=clingo_lang)
         tree.parse(program)
-        tree.transform(meta_files=[encoding_dir / "compile_pools.lp"])
+        with spy_re_reify() as re_reify:
+            tree.transform(meta_files=[encoding_dir / "compile_pools.lp"])
+            re_reify.assert_called_once()
         result = tree.sources[Function("s", [Number(0)])].source_bytes.decode()
         statements = parse_statements(result)
         for stmt in statements:
