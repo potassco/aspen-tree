@@ -235,7 +235,8 @@ class NodeFormatter:
         # The texts to splice in, as (start, end, key, text), sorted so
         # that at the same position, appends of nodes ending there come
         # first (inner ones first), then prepends of nodes starting
-        # there (outer ones first), then the replacement of a node.
+        # there (outer ones first), then the replacements of nodes, where
+        # those of empty nodes come first.
         pieces: list[tuple[int, int, tuple[int, int], bytes]] = []
         for edit in edits:
             target, depth = targets[(edit.arguments[0], edit.name)]
@@ -246,7 +247,7 @@ class NodeFormatter:
                 pieces.append((target.start_byte, target.start_byte, (1, depth), text))
             else:
                 pieces.append((target.start_byte, target.end_byte, (2, 0), text))
-        pieces.sort(key=lambda piece: (piece[0], piece[2]))
+        pieces.sort(key=lambda piece: (piece[0], piece[2], piece[1]))
         source_bytes = source.source_bytes
         cursor = base_node.start_byte
         edited = b""
