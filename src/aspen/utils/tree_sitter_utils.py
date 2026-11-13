@@ -573,7 +573,8 @@ def format_point_span(
     to the end column), with a single '...' line in between when the
     span covers more than two lines.
     """
-    lines = source_bytes.split(b"\n")
+    # the \r of \r\n line endings is not part of the lines shown
+    lines = [line.rstrip(b"\r") for line in source_bytes.split(b"\n")]
     first_line = lines[start.row].decode(encoding, errors="replace")
     if start.row == end.row:
         width = max(1, end.column - start.column)

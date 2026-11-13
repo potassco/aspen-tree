@@ -57,7 +57,8 @@ Both subcommands take one or more sources of the form
 
 The sources are identified by `s(0)`, `s(1)`, ... in the order they
 are given. Since `SOURCE` is split at the first `:` and `@`, paths
-containing these characters cannot be given.
+containing these characters cannot be given, except for the colons of
+drives in Windows paths, as in `C:\a.lp@clingo:D:\out.lp`.
 
 A source starting with `-` other than `-` itself, such as `-:out.lp`
 (standard input with a destination), must be given after `--`, as in

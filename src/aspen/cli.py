@@ -2,6 +2,7 @@
 functionality."""
 
 import importlib
+import os
 import shlex
 import sys
 from argparse import Namespace
@@ -73,8 +74,32 @@ def _parse_sources(
     ]
 
 
+def _is_drive_colon(spec: str, index: int) -> bool:
+    """Whether the colon at index of spec belongs to the drive of a
+    Windows path, as in C:\\a.lp or C:/a.lp, at the start of a source
+    or of a destination."""
+    return (
+        index >= 1
+        and spec[index - 1].isalpha()
+        and (index == 1 or spec[index - 2] == ":")
+        and spec[index + 1 : index + 2] in ("\\", "/")
+    )
+
+
+def _split_destination(spec: str, windows: bool) -> tuple[str, Optional[str]]:
+    """Split a CLI source argument at the colon starting its ':DEST'
+    suffix (if any), skipping the colons of Windows drives on
+    Windows."""
+    index = spec.find(":")
+    while index != -1 and windows and _is_drive_colon(spec, index):
+        index = spec.find(":", index + 1)
+    if index == -1:
+        return spec, None
+    return spec[:index], spec[index + 1 :]
+
+
 def _parse_source_spec(
-    spec: str, *, allow_dest: bool
+    spec: str, *, allow_dest: bool, windows: bool = os.name == "nt"
 ) -> tuple[str, Optional[str], Optional[Path]]:
     """Parse a CLI source argument of the form SOURCE[@LANG][:DEST]:
     SOURCE is a path, or '-' for stdin; the optional '@LANG' suffix
@@ -82,19 +107,21 @@ def _parse_source_spec(
     source; the optional ':DEST' suffix (only accepted when
     allow_dest, i.e. for transform) says where this source's
     transformed output goes - a path, or '-' (or omitted entirely)
-    for stdout. '@LANG' must come before ':DEST', not after."""
-    pre, sep, dest_str = spec.partition(":")
-    if sep and not allow_dest:
+    for stdout. '@LANG' must come before ':DEST', not after. On
+    Windows, the colons of drives (as in C:\\a.lp) do not start a
+    ':DEST' suffix."""
+    pre, dest_str = _split_destination(spec, windows)
+    if dest_str is not None and not allow_dest:
         raise ValueError(
             f"Invalid source '{spec}': a ':DEST' destination is not accepted "
             "here; only an optional '@LANG' suffix is allowed."
         )
-    if "@" in dest_str:
+    if dest_str is not None and "@" in dest_str:
         raise ValueError(
             f"Invalid source '{spec}': '@LANG' must come before ':DEST', not " "after it."
         )
     source, lang_sep, lang = pre.partition("@")
-    dest = None if not sep or dest_str == "-" else Path(dest_str)
+    dest = None if dest_str is None or dest_str == "-" else Path(dest_str)
     return source, (lang if lang_sep else None), dest
 
 

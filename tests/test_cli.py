@@ -183,6 +183,29 @@ class TestParseSourceSpec(TestCaseWithRedirectedLogs):
             ("a.lp", "clingo", None),
         )
 
+    def test_parse_source_spec_windows_drives(self) -> None:
+        """Test that on Windows, the colons of drives at the start of a
+        source or of a destination do not start a destination."""
+        for spec, expected in [
+            ("C:\\a.lp", ("C:\\a.lp", None, None)),
+            ("C:/a.lp@clingo", ("C:/a.lp", "clingo", None)),
+            ("C:\\a.lp@clingo:D:\\o.lp", ("C:\\a.lp", "clingo", Path("D:\\o.lp"))),
+            ("a.lp:C:\\o.lp", ("a.lp", None, Path("C:\\o.lp"))),
+            ("-:C:/o.lp", ("-", None, Path("C:/o.lp"))),
+        ]:
+            with self.subTest(spec=spec):
+                self.assertEqual(
+                    _parse_source_spec(spec, allow_dest=True, windows=True), expected
+                )
+
+    def test_parse_source_spec_no_drives_elsewhere(self) -> None:
+        """Test that on other systems, a colon after a single letter
+        starts a destination."""
+        self.assertEqual(
+            _parse_source_spec("x:/out.lp", allow_dest=True, windows=False),
+            ("x", None, Path("/out.lp")),
+        )
+
     def test_parse_source_spec_stdin_plain(self) -> None:
         """Test that bare stdin ('-') has no language override and
         defaults to stdout."""

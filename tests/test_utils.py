@@ -499,3 +499,14 @@ class TestTreeSitterUtils(  # pylint: disable=too-many-public-methods
             format_node_span(tree.root_node, source, "utf8"),
             "p(1,\n^^^^\n...\n3).\n^^^",
         )
+
+    def test_format_node_span_crlf(self) -> None:
+        """Test that the \\r of \\r\\n line endings is not shown as part
+        of the lines of a span."""
+        source = b"a.\r\np(1,\r\n2)."
+        tree = Parser(clingo_lang).parse(source)
+        rules = tree.root_node.children
+        self.assertEqual(format_node_span(rules[0], source, "utf8"), "a.\n^^")
+        self.assertEqual(
+            format_node_span(rules[1], source, "utf8"), "p(1,\n^^^^\n2).\n^^^"
+        )
