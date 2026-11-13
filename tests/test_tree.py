@@ -2,7 +2,7 @@
 
 import tempfile
 from contextlib import redirect_stdout
-from io import StringIO
+from io import BytesIO, StringIO, TextIOWrapper
 from pathlib import Path
 
 # pylint: disable=import-error,no-name-in-module
@@ -976,6 +976,25 @@ p(1
                 tree.write()
                 self.assertEqual(buf.getvalue(), "b.\n\n")
             self.assertEqual(out_path.read_text(), "a.\n")
+
+    def test_write_keeps_line_endings(self) -> None:
+        """Test that write() writes \\r\\n line endings as they are,
+        also to streams translating newlines as text streams do on
+        Windows, where text mode would turn them into \\r\\r\\n, and
+        keeps the order of output written to stdout before."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "out.lp"
+            tree = AspenTree(default_language=clingo_lang)
+            tree.parse("a.\r\nb.\r\n", destination=out_path)
+            tree.parse("c.\r\n")
+            output = BytesIO()
+            stdout = TextIOWrapper(output, encoding="utf-8", newline="\r\n")
+            with redirect_stdout(stdout):
+                print("x")
+                tree.write()
+            stdout.flush()
+            self.assertEqual(output.getvalue(), b"x\r\nc.\r\n")
+            self.assertEqual(out_path.read_bytes(), b"a.\r\nb.\r\n")
 
     def test_write_after_transform_writes_transformed_text(self) -> None:
         """Test that write() reflects a source's current, possibly

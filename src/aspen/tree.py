@@ -2,6 +2,7 @@
 
 import dataclasses
 import logging
+import sys
 from collections import defaultdict
 from graphlib import CycleError, TopologicalSorter
 from io import TextIOBase
@@ -289,15 +290,27 @@ class AspenTree:  # pylint: disable=too-many-instance-attributes
         """Write every source's current text to its associated
         destination, in the order they were parsed: a source with no
         destination (the default) is printed to stdout. A newline is
-        added to text not ending with one."""
+        added to text not ending with one.
+
+        The text is written as is, without translating newlines (in
+        text mode, Python would write the \\r\\n line endings of a source
+        as \\r\\r\\n on Windows): files are written in the encoding of
+        the source, and stdout is written to via its binary buffer, if
+        it has one."""
         for source in self.sources.values():
             text = source.source_bytes.decode(source.encoding)
             if not text.endswith("\n"):
                 text += "\n"
-            if source.destination is None:
-                print(text, end="")
+            if source.destination is not None:
+                source.destination.write_bytes(text.encode(source.encoding))
+                continue
+            buffer = getattr(sys.stdout, "buffer", None)
+            if buffer is None:
+                sys.stdout.write(text)
             else:
-                source.destination.write_text(text)
+                sys.stdout.flush()
+                buffer.write(text.encode(sys.stdout.encoding or "utf-8"))
+                buffer.flush()
 
     def _reify_node_attrs(
         self, node: ts.Node, node_id: Symbol, encoding: StringEncoding

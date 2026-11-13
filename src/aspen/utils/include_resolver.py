@@ -16,14 +16,14 @@ so that a user's own file three levels deep can use '@aspen/' too.
 """
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePath
 
 ASPEN_PREFIX = "@aspen/"
 
 _INCLUDE_RE = re.compile(r'#include\s*"([^"]*)"')
 
 
-def rewrite_includes(text: str, bundled_utils_path: Path) -> str:
+def rewrite_includes(text: str, bundled_utils_path: PurePath) -> str:
     """Rewrite every #include "@aspen/foo.lp" in text to the real,
     absolute location of foo.lp under bundled_utils_path. Other
     #include targets are left untouched."""
@@ -33,7 +33,9 @@ def rewrite_includes(text: str, bundled_utils_path: Path) -> str:
         if not target.startswith(ASPEN_PREFIX):
             return match.group(0)
         resolved = bundled_utils_path / target[len(ASPEN_PREFIX) :]
-        return f'#include "{resolved}"'
+        # clingo reads backslashes in strings as escape sequences, so the
+        # path is given with forward slashes, which Windows accepts too
+        return f'#include "{resolved.as_posix()}"'
 
     return _INCLUDE_RE.sub(replace, text)
 
@@ -63,7 +65,7 @@ def _needs_rewriting(path: Path, seen: set[Path]) -> bool:
     if path in seen:
         return False
     seen.add(path)
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     return _uses_aspen_prefix(text) or any(
         _needs_rewriting(target, seen) for target in _local_include_targets(text, path)
     )
@@ -74,12 +76,12 @@ def _materialize(
 ) -> Path:
     if path in done:
         return done[path]
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     for target in _local_include_targets(text, path):
         _materialize(target, cache_root, bundled_utils_path, done)
     mirrored = cache_root / path.relative_to(path.anchor)
     mirrored.parent.mkdir(parents=True, exist_ok=True)
-    mirrored.write_text(rewrite_includes(text, bundled_utils_path))
+    mirrored.write_text(rewrite_includes(text, bundled_utils_path), encoding="utf-8")
     done[path] = mirrored
     return mirrored
 

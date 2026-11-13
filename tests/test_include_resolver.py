@@ -1,7 +1,7 @@
 """Unit tests for the '@aspen/...' include-path convention."""
 
 import tempfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from aspen.utils.include_resolver import resolve_meta_encoding_file, rewrite_includes
 from aspen.utils.log import TestCaseWithRedirectedLogs
@@ -18,7 +18,18 @@ class TestRewriteIncludes(TestCaseWithRedirectedLogs):
         result = rewrite_includes(text, bundled)
         self.assertEqual(
             result,
-            f'#include "{bundled / "clingo/symbol_signature.lp"}".',
+            f'#include "{(bundled / "clingo/symbol_signature.lp").as_posix()}".',
+        )
+
+    def test_rewrites_windows_path_with_forward_slashes(self) -> None:
+        """Test that a Windows path is written with forward slashes, as
+        clingo reads backslashes in strings as escape sequences (so
+        that e.g. C:\\Users\\runner would contain the escape \\r)."""
+        bundled = PureWindowsPath("C:\\Users\\runner\\aspen\\utils")
+        text = '#include "@aspen/clingo/symbol_signature.lp".'
+        self.assertEqual(
+            rewrite_includes(text, bundled),
+            '#include "C:/Users/runner/aspen/utils/clingo/symbol_signature.lp".',
         )
 
     def test_leaves_local_target_untouched(self) -> None:
@@ -41,9 +52,9 @@ class TestRewriteIncludes(TestCaseWithRedirectedLogs):
         self.assertEqual(
             result,
             (
-                f'#include "{bundled / "a.lp"}".\n'
+                f'#include "{(bundled / "a.lp").as_posix()}".\n'
                 '#include "./local.lp".\n'
-                f'#include "{bundled / "sub/b.lp"}".\n'
+                f'#include "{(bundled / "sub/b.lp").as_posix()}".\n'
             ),
         )
 
@@ -119,7 +130,7 @@ class TestResolveMetaEncodingFile(TestCaseWithRedirectedLogs):
             rewritten_text = result.read_text()
             self.assertEqual(
                 rewritten_text,
-                f'#include "{bundled / "symbol_signature.lp"}".\na.',
+                f'#include "{(bundled / "symbol_signature.lp").as_posix()}".\na.',
             )
 
     def test_mirrors_local_file_that_transitively_uses_aspen_prefix(self) -> None:
@@ -145,7 +156,7 @@ class TestResolveMetaEncodingFile(TestCaseWithRedirectedLogs):
             self.assertTrue(mirrored_helpers.is_file())
             self.assertEqual(
                 mirrored_helpers.read_text(),
-                f'#include "{bundled / "foo.lp"}".\nhelper.',
+                f'#include "{(bundled / "foo.lp").as_posix()}".\nhelper.',
             )
 
     def test_diamond_shaped_include_graph_materializes_shared_file_once(self) -> None:
@@ -171,7 +182,7 @@ class TestResolveMetaEncodingFile(TestCaseWithRedirectedLogs):
             mirrored_shared = result.parent / "shared.lp"
             self.assertEqual(
                 mirrored_shared.read_text(),
-                f'#include "{bundled / "foo.lp"}".\nshared.',
+                f'#include "{(bundled / "foo.lp").as_posix()}".\nshared.',
             )
 
     def test_skips_missing_local_include_target_without_raising(self) -> None:
