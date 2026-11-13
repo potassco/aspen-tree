@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from aspen.__main__ import main
 from aspen.cli import cmd_reify, cmd_transform
+from aspen.tree import PARSER_LOGGER_NAME
 from aspen.utils.log import TestCaseWithRedirectedLogs, configure_logging, get_logger
 from aspen.utils.parser import get_parser
 
@@ -218,6 +219,28 @@ class TestMain(TestCaseWithRedirectedLogs):
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn("error: grounding stopped because of errors", err_buf.getvalue())
         self.assertNotIn("Traceback", err_buf.getvalue())
+
+    def test_main_log_parser(self) -> None:
+        """Test that the messages of the tree-sitter parser are only
+        logged with --log-parser, and not with --log debug alone."""
+        parser_logger = logging.getLogger(PARSER_LOGGER_NAME)
+        level = parser_logger.level
+        self.addCleanup(parser_logger.setLevel, level)
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "in.lp"
+            source_path.write_text("a.")
+            for options, expected in [([], False), (["--log-parser"], True)]:
+                with self.subTest(options=options):
+                    argv = ["aspen", "--log", "debug", *options]
+                    argv += ["reify", str(source_path), "-l", "clingo"]
+                    with (
+                        patch.object(sys, "argv", argv),
+                        patch.object(sys, "stdout", StringIO()),
+                        self.assertLogs(level=logging.DEBUG) as logs,
+                    ):
+                        main()
+                    logged = any("tree-sitter parser" in m for m in logs.output)
+                    self.assertEqual(logged, expected)
 
     def test_main_reports_traceback_on_debug(self) -> None:
         """Test that with --log debug, an error raised by the

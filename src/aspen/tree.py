@@ -36,7 +36,15 @@ enable_python()
 
 logger = get_logger(__name__)
 clingo_logger = get_clingo_logger(logger)
-ts_logger = get_ts_logger(logger)
+
+# The messages of tree-sitter about each action of its parser and lexer
+# are logged at level DEBUG by a separate logger, which only logs them
+# if its level is set to DEBUG explicitly (e.g. via --log-parser), so
+# that they do not clutter the debug output of aspen.
+PARSER_LOGGER_NAME = "aspen.tree_sitter"
+parser_logger = get_logger(PARSER_LOGGER_NAME)
+parser_logger.setLevel(logging.INFO)
+ts_logger = get_ts_logger(parser_logger)
 
 
 def _set_parser_logger(parser: ts.Parser) -> None:
@@ -46,7 +54,7 @@ def _set_parser_logger(parser: ts.Parser) -> None:
     takes a significant share of the parsing time even if the messages
     are discarded, so it is only set if they are logged.
     """
-    if logger.isEnabledFor(logging.DEBUG):
+    if parser_logger.isEnabledFor(logging.DEBUG):
         parser.logger = ts_logger
     else:
         del parser.logger

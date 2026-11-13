@@ -1,5 +1,6 @@
 """Unit tests for module aspen.tree"""
 
+import logging
 import tempfile
 from contextlib import redirect_stdout
 from io import BytesIO, StringIO, TextIOWrapper
@@ -9,7 +10,7 @@ from pathlib import Path
 from clingo.symbol import Function, Number, String, parse_term
 
 from aspen.messages import cons_list_symb2py
-from aspen.tree import AspenTree, TransformError, generic_util_path
+from aspen.tree import PARSER_LOGGER_NAME, AspenTree, TransformError, generic_util_path
 from aspen.utils.testing import AspenTestCase
 from aspen.utils.tree_sitter_utils import get_node_at_path
 
@@ -928,6 +929,21 @@ p(1
             meta_string='aspen(print("a.", s(0))).',
             expected_sources=["a.\n"],
         )
+
+    def test_parser_logging(self) -> None:
+        """Test that the actions of the tree-sitter parser and lexer are
+        logged if the level of their logger is set to DEBUG, and not by
+        default."""
+        parser_logger = logging.getLogger(PARSER_LOGGER_NAME)
+        self.assertFalse(parser_logger.isEnabledFor(logging.DEBUG))
+        level = parser_logger.level
+        self.addCleanup(parser_logger.setLevel, level)
+        parser_logger.setLevel(logging.DEBUG)
+        tree = AspenTree(default_language=clingo_lang)
+        with self.assertLogs(PARSER_LOGGER_NAME, level=logging.DEBUG) as logs:
+            tree.parse("a.")
+        self.assertTrue(any("tree-sitter parser" in m for m in logs.output))
+        self.assertTrue(any("tree-sitter lexer" in m for m in logs.output))
 
     def test_write_default_destination_prints_to_stdout(self) -> None:
         """Test that a source parsed with no destination (the

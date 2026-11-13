@@ -179,6 +179,15 @@ def get_parser() -> ArgumentParser:
     )
 
     parser.add_argument(
+        "--log-parser",
+        action="store_true",
+        help=(
+            "also log the actions of the tree-sitter parser and lexer, as debug "
+            "messages, which are left out of the debug output otherwise"
+        ),
+    )
+
+    parser.add_argument(
         "--version", "-v", action="version", version=f"%(prog)s {VERSION}"
     )
 

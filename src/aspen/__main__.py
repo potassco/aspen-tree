@@ -7,6 +7,7 @@ import sys
 import traceback
 
 from .cli import CLI_ERRORS
+from .tree import PARSER_LOGGER_NAME
 from .utils.log import configure_logging
 from .utils.parser import get_parser
 
@@ -18,6 +19,8 @@ def main() -> None:
     parser = get_parser()
     args = parser.parse_args()
     configure_logging(sys.stderr, args.log, sys.stderr.isatty())
+    if args.log_parser:
+        logging.getLogger(PARSER_LOGGER_NAME).setLevel(logging.DEBUG)
 
     if not hasattr(args, "func"):
         parser.print_help()

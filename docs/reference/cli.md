@@ -5,7 +5,7 @@ icon: material/console
 # Command line interface
 
 ```
-aspen [--log {error,warning,info,debug}] [--version] {reify,transform} ...
+aspen [--log {error,warning,info,debug}] [--log-parser] [--version] {reify,transform} ...
 ```
 
 The `aspen` command has two subcommands: [`reify`](#aspen-reify)
@@ -24,9 +24,15 @@ These options come before the subcommand, e.g.
     (see [messages](transformations.md#messages)) and of aspen-tree itself
     are shown on standard error if their level is at least this level,
     as e.g. `WARNING:  - message`. With `info`, aspen-tree reports what it
-    parses, grounds and edits, and with `debug` additionally the facts,
-    models and parser actions. With `debug`, errors are shown with
-    their Python traceback.
+    parses, grounds and edits, and with `debug` additionally the facts
+    and models. With `debug`, errors are shown with their Python
+    traceback.
+
+`--log-parser`
+:   Also log each action of the tree-sitter parser and lexer as a
+    debug message, which is left out otherwise, as it is mostly useful
+    for debugging grammars. In Python, the same is achieved by setting
+    the level of the `aspen.tree_sitter` logger to `DEBUG`.
 
 `-v`, `--version`
 :   Print the version of aspen-tree and exit.
